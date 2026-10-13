@@ -92,6 +92,7 @@ It answers, for *your* subscription and tenant:
 |---|---|---|
 | Allowed regions (Azure for Students policy) | You picked a blocked region | Pick one from the list it prints |
 | Linux App Service B1 available in the region | No capacity/offer there | Pick another allowed region |
+| App Service quota (B1 instances) in the region | Limit is 0 (common on new / student subscriptions) | Bootstrap requests 1 instance automatically; if refused: portal → *Quotas* → *App Service*, or another region |
 | Users may register applications | University tenant blocks it | Instructor-assisted setup (Infra README §8) |
 | You are Owner / can assign roles | Bootstrap cannot grant roles | Ask the instructor |
 | Owner is *constrained* (cannot delegate role management) | Not an error | You will create the Web Apps from your laptop in Step 7c |
@@ -103,6 +104,9 @@ You can also check by hand:
 az account show --query "{name:name, id:id}"                       # which subscription
 az policy assignment list --disable-scope-strict-match \
   --query "[].parameters.listOfAllowedLocations.value" -o json      # allowed regions
+az quota show --resource-name B1 \
+  --scope "/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.Web/locations/germanywestcentral" \
+  --query properties.limit.value                                      # B1 quota (needs: az extension add -n quota)
 az role assignment list --assignee "$(az ad signed-in-user show --query id -o tsv)" \
   --include-inherited --query "[].{role:roleDefinitionName, condition:condition}" -o json
 ```

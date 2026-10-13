@@ -42,7 +42,7 @@ readonly ASSIGNABLE_ROLE_IDS=(
   7f951dda-4ed3-4680-a7ca-43fe172d538d # AcrPull
 )
 # Extension point: add the namespace of every new Azure service (e.g. Microsoft.DataFactory).
-readonly RESOURCE_PROVIDERS=(Microsoft.Storage Microsoft.ContainerRegistry Microsoft.Web Microsoft.ManagedIdentity)
+readonly RESOURCE_PROVIDERS=(Microsoft.Storage Microsoft.ContainerRegistry Microsoft.Web Microsoft.ManagedIdentity Microsoft.Quota)
 
 # Steps that failed because of missing permissions; printed at the end.
 MANUAL_STEPS=()
@@ -248,6 +248,49 @@ check_region() {
   fi
 }
 
+# App Service quota per region and SKU (e.g. "B1 VMs"). New and Azure for Students
+# subscriptions often start at 0 in some regions; the plan then fails with "Operation
+# cannot be completed without additional quota". Sets QUOTA_SHORTFALL=true if too low.
+quota_scope() {
+  echo "/subscriptions/$AZURE_SUBSCRIPTION_ID/providers/Microsoft.Web/locations/$AZURE_LOCATION"
+}
+
+check_app_service_quota() {
+  QUOTA_SHORTFALL=false
+  az extension add --name quota --upgrade --only-show-errors >/dev/null 2>&1 || true
+  local limit usage
+  limit="$(az quota show --resource-name "$APP_SERVICE_SKU" --scope "$(quota_scope)" --query properties.limit.value --output tsv 2>/dev/null || true)"
+  usage="$(az quota usage show --resource-name "$APP_SERVICE_SKU" --scope "$(quota_scope)" --query properties.usages.value --output tsv 2>/dev/null || true)"
+  if [[ ! "$limit" =~ ^[0-9]+$ ]]; then
+    warn "Could not read the $APP_SERVICE_SKU quota in $AZURE_LOCATION (fine in most regions; the apply will tell)."
+    return
+  fi
+  [[ "$usage" =~ ^[0-9]+$ ]] || usage=0
+  QUOTA_USAGE="$usage"
+  # The project needs one instance. A re-run counts our own plan in "usage", so only a
+  # limit of 0 is a real shortfall.
+  if ((limit >= 1)); then
+    ok "App Service quota: $usage of $limit $APP_SERVICE_SKU instance(s) used in $AZURE_LOCATION"
+    ((limit - usage >= 1)) || warn "Quota is fully used; that is fine if the project's plan already exists."
+  else
+    QUOTA_SHORTFALL=true
+    warn "App Service quota for $APP_SERVICE_SKU in $AZURE_LOCATION is $limit (used: $usage). Bootstrap will request +1 (usually approved instantly)."
+  fi
+}
+
+request_app_service_quota() {
+  [[ "${QUOTA_SHORTFALL:-false}" == "true" ]] || return 0
+  info "Requesting App Service quota ($APP_SERVICE_SKU in $AZURE_LOCATION)"
+  local wanted=$((QUOTA_USAGE + 1))
+  if az quota update --resource-name "$APP_SERVICE_SKU" --scope "$(quota_scope)" \
+    --limit-object value="$wanted" --output none 2>/dev/null; then
+    ok "Quota raised to $wanted $APP_SERVICE_SKU instance(s)"
+  else
+    warn "Automatic quota request failed."
+    MANUAL_STEPS+=("Azure portal > Quotas > App Service > $AZURE_LOCATION > request '$APP_SERVICE_SKU VMs' = $wanted (or pick another region with AZURE_LOCATION=...)")
+  fi
+}
+
 check_app_registration() {
   if [[ -n "${AZURE_CLIENT_ID:-}" ]]; then
     ok "Using the existing application $AZURE_CLIENT_ID (instructor-assisted mode)"
@@ -313,6 +356,7 @@ run_preflight() {
   info "Preflight checks (read-only)"
   check_github_repositories
   check_region
+  check_app_service_quota
   check_app_registration
   check_role_assignment_rights
   check_resource_providers
@@ -668,6 +712,7 @@ main() {
   save_settings
 
   register_resource_providers
+  request_app_service_quota
   create_state_storage
   create_github_identity
   add_federated_credentials "github-apps-main" "$APPS_REPO"

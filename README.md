@@ -168,6 +168,7 @@ Granted to the **GitHub Actions identity**:
 | Constraint | Effect | Handled by |
 |---|---|---|
 | Policy *Allowed resource deployment regions* (e.g. germanywestcentral, francecentral, swedencentral, spaincentral, polandcentral) | Deployments elsewhere fail with `RequestDisallowedByPolicy` | `bootstrap.sh` reads the policy, defaults to an allowed region and rejects others |
+| App Service quota 0 in some regions (`B1 VMs` limit) | Plan creation fails: *Operation cannot be completed without additional quota* | Preflight reads the quota; bootstrap requests 1 instance via the Quota API |
 | Fixed credit, no pay-as-you-go | Resources stop when credit runs out | Use B1 + ACR Basic only; run `cleanup.sh` after grading |
 | University tenant may block app registrations | `az ad app create` fails | Instructor-assisted setup below |
 | Owner may be constrained (cannot assign RBAC roles to others) | GitHub identity cannot create AcrPull assignments | Local stage-3 apply (§11) |
@@ -193,7 +194,7 @@ The student then runs `AZURE_CLIENT_ID=<APP_ID> ./bootstrap/bootstrap.sh`. The s
 ```bash
 az login
 gh auth login
-./bootstrap/bootstrap.sh --check   # read-only preflight: regions, B1 availability, app registration, role rights
+./bootstrap/bootstrap.sh --check   # read-only preflight: regions, B1 availability + quota, app registration, role rights
 ./bootstrap/bootstrap.sh
 ```
 
@@ -330,7 +331,7 @@ Modules, app settings, identity outputs, the RBAC allow-list and the backend dat
 | `AuthorizationFailed ... roleAssignments/write` | Role assignment not allowed | Owner must run bootstrap, or instructor-assisted setup |
 | `Insufficient privileges to complete the operation` (az ad app create) | Tenant blocks app registrations | Instructor-assisted setup |
 | `RequestDisallowedByPolicy` | Azure for Students region policy | Re-run bootstrap with an allowed region (`AZURE_LOCATION=...`) |
-| `This region has quota of 0 instances` | No B1 quota in that region | Choose another region |
+| `Operation cannot be completed without additional quota` / `Current Limit (B1 VMs): 0` | No App Service quota in that region | Re-run `bootstrap.sh` (requests quota) or `az quota update --resource-name B1 --scope /subscriptions/<id>/providers/Microsoft.Web/locations/<region> --limit-object value=1` |
 | `terraform init`: `403 AuthorizationPermissionMismatch` | Blob role not propagated yet | Wait 2–5 minutes and retry |
 | `Error acquiring the state lock` | A previous run was interrupted | Make sure nothing is running, then `terraform force-unlock <LOCK_ID>` |
 | Terraform workflow: `Image backend:latest not found` | Stage 2 not done | Run the Apps workflows first |

@@ -21,3 +21,9 @@ Teaching project (UTCN Cloud Computing). Azure infra for the companion Apps repo
 - `CREATE_WEB_APPS` must never go back to `false` once Web Apps exist (it would delete them).
 - New roles Terraform assigns must be added to `ASSIGNABLE_ROLE_IDS` in `bootstrap.sh`; new resource providers to both `bootstrap.sh` and `providers.tf`.
 - Commits follow Conventional Commits: `type(scope): summary` with type in feat, fix, docs, refactor, test, ci, build, chore (e.g. `fix(bootstrap): reuse existing state resource group`).
+
+## Agent skills (recommended)
+Claude Code offers these automatically when you trust the folder (`.claude/settings.json`). Other agents (Codex, Copilot, Cursor, …):
+`npx skills add hashicorp/agent-skills/plugins/terraform/skills/terraform-style-guide`,
+`npx skills add https://github.com/antonbabenko/terraform-skill`,
+`npx skills add microsoft/azure-skills` (use azure-validate / azure-diagnostics; this project does not use azd).

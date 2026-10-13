@@ -1,0 +1,12 @@
+{
+  "extraKnownMarketplaces": {
+    "hashicorp": { "source": { "source": "github", "repo": "hashicorp/agent-skills" } },
+    "antonbabenko": { "source": { "source": "github", "repo": "antonbabenko/agent-plugins" } },
+    "azure-skills": { "source": { "source": "github", "repo": "microsoft/azure-skills" } }
+  },
+  "enabledPlugins": {
+    "terraform@hashicorp": true,
+    "terraform-skill@antonbabenko": true,
+    "azure@azure-skills": true
+  }
+}
