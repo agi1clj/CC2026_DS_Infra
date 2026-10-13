@@ -37,7 +37,7 @@ git clone https://github.com/<github-user>/CC2026_<LastName>_<FirstName>_Apps.gi
 git clone https://github.com/<github-user>/CC2026_<LastName>_<FirstName>_Infra.git
 ```
 
-Copy the reference files (from `CC2026_DS_Apps` and `CC2026_DS_Infra`, provided by the instructor) into your two folders. Then commit:
+Copy the reference files (from `CC2026_DS_Applications` and `CC2026_DS_Infra`, provided by the instructor) into your two folders. Then commit:
 
 ```bash
 cd CC2026_<LastName>_<FirstName>_Apps
