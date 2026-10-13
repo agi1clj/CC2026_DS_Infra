@@ -459,9 +459,22 @@ create_github_identity() {
 
 # GitHub Actions jobs on the main branch of <repo> may sign in as the application.
 # No secret is stored anywhere: Azure trusts the short-lived token GitHub issues.
-add_federated_credential() {
+#
+# GitHub issues the token "subject" in one of two formats, depending on the repository:
+#   repo:<owner>/<repo>:ref:refs/heads/main                              (classic)
+#   repo:<owner>@<owner-id>/<repo>@<repo-id>:ref:refs/heads/main         (with immutable IDs)
+# Both are registered so login works either way.
+add_federated_credentials() {
   local name="$1" repo="$2"
-  local subject="repo:$GITHUB_OWNER/$repo:ref:refs/heads/main"
+  local owner_id repo_id
+  owner_id="$(gh api "users/$GITHUB_OWNER" --jq .id)"
+  repo_id="$(gh api "repos/$GITHUB_OWNER/$repo" --jq .id)"
+  add_federated_credential "$name" "$repo" "repo:$GITHUB_OWNER/$repo:ref:refs/heads/main"
+  add_federated_credential "$name-ids" "$repo" "repo:$GITHUB_OWNER@$owner_id/$repo@$repo_id:ref:refs/heads/main"
+}
+
+add_federated_credential() {
+  local name="$1" repo="$2" subject="$3"
   local current
   current="$(az ad app federated-credential list --id "$AZURE_CLIENT_ID" --query "[?name=='$name'] | [0].subject" --output tsv 2>/dev/null || true)"
 
@@ -657,8 +670,8 @@ main() {
   register_resource_providers
   create_state_storage
   create_github_identity
-  add_federated_credential "github-apps-main" "$APPS_REPO"
-  add_federated_credential "github-infra-main" "$INFRA_REPO"
+  add_federated_credentials "github-apps-main" "$APPS_REPO"
+  add_federated_credentials "github-infra-main" "$INFRA_REPO"
   assign_github_roles
   write_terraform_files
   terraform_init
