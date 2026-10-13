@@ -12,7 +12,7 @@
 #
 # Usage (from the root of the Infra repository):
 #   az login
-#   gh auth login
+#   gh auth login --scopes workflow
 #   ./bootstrap/bootstrap.sh --check   # read-only preflight: changes nothing, tells you what will work
 #   ./bootstrap/bootstrap.sh           # runs the same checks, then creates everything
 #
@@ -141,7 +141,7 @@ check_logins() {
   info "Checking Azure and GitHub authentication"
   az account show --output none 2>/dev/null || die "Not logged in to Azure. Run: az login"
   # `gh auth status` fails if ANY stored account is invalid, so test the active github.com login directly.
-  gh api user --jq .login >/dev/null 2>&1 || die "Not logged in to GitHub. Run: gh auth login"
+  gh api user --jq .login >/dev/null 2>&1 || die "Not logged in to GitHub. Run: gh auth login --scopes workflow"
   ok "Azure CLI and GitHub CLI are authenticated"
 }
 
@@ -215,6 +215,21 @@ PREFLIGHT_PROBLEMS=0
 problem() {
   warn "$*"
   PREFLIGHT_PROBLEMS=$((PREFLIGHT_PROBLEMS + 1))
+}
+
+# Classic OAuth tokens list their scopes; without "workflow" GitHub rejects pushes that
+# touch .github/workflows. (Fine-grained tokens report no scopes and are not checked.)
+check_github_scopes() {
+  local scopes
+  scopes="$(gh api user --include 2>/dev/null | tr -d '\r' | sed -n 's/^[Xx]-[Oo][Aa]uth-[Ss]copes: //p')"
+  if [[ -z "$scopes" ]]; then
+    return
+  fi
+  if grep -qw workflow <<<"$scopes"; then
+    ok "GitHub login can push workflow files (scope: workflow)"
+  else
+    problem "Your GitHub login lacks the 'workflow' scope, so pushing workflow changes fails. Run: gh auth refresh --scopes workflow"
+  fi
 }
 
 check_github_repositories() {
@@ -354,6 +369,7 @@ check_resource_providers() {
 
 run_preflight() {
   info "Preflight checks (read-only)"
+  check_github_scopes
   check_github_repositories
   check_region
   check_app_service_quota

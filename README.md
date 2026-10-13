@@ -35,7 +35,7 @@ More diagrams (conceptual, UML deployment, CI/CD): [docs/architecture.md](docs/a
 | Resource group | `rg-cc2026-agi-tfstate` | bootstrap | Holds Terraform state; outlives `terraform destroy` |
 | Storage account + container `tfstate` | `sttfcc2026agi<6 hex>` | bootstrap | Remote state `dev.tfstate` |
 | Entra application + service principal | `github-actions-cc2026-agi` | bootstrap | Identity used by GitHub Actions |
-| Federated credentials | `github-apps-main`, `github-infra-main` | bootstrap | Trust GitHub OIDC tokens from `main` of each repo |
+| Federated credentials | `github-apps-main(-ids)`, `github-infra-main(-ids)` | bootstrap | Trust GitHub OIDC tokens from `main` of each repo (name-based and ID-based subject) |
 | Resource group | `rg-cc2026-agi-dev` | Terraform | Everything below |
 | Container registry (Basic) | `acrcc2026agidev<4 hex>` | Terraform | Stores `backend` and `frontend` images |
 | User-assigned identity | `id-cc2026-agi-dev-webapps` | Terraform | Web Apps pull from ACR with it (AcrPull); reusable for P2 data access |
@@ -139,7 +139,11 @@ GitHub Actions signs in to Azure **without any stored password**:
 | Federated credential | Subject |
 |---|---|
 | `github-apps-main` | `repo:<owner>/<Apps repo>:ref:refs/heads/main` |
+| `github-apps-main-ids` | `repo:<owner>@<owner-id>/<Apps repo>@<repo-id>:ref:refs/heads/main` |
 | `github-infra-main` | `repo:<owner>/<Infra repo>:ref:refs/heads/main` |
+| `github-infra-main-ids` | `repo:<owner>@<owner-id>/<Infra repo>@<repo-id>:ref:refs/heads/main` |
+
+GitHub issues one of the two subject formats depending on the repository (newer repositories include immutable IDs), so bootstrap registers both.
 
 Pull requests, other branches and forks get no Azure access.
 
@@ -193,7 +197,7 @@ The student then runs `AZURE_CLIENT_ID=<APP_ID> ./bootstrap/bootstrap.sh`. The s
 
 ```bash
 az login
-gh auth login
+gh auth login --scopes workflow   # 'workflow' is needed to push .github/workflows files
 ./bootstrap/bootstrap.sh --check   # read-only preflight: regions, B1 availability + quota, app registration, role rights
 ./bootstrap/bootstrap.sh
 ```
@@ -283,7 +287,7 @@ shellcheck bootstrap/bootstrap.sh scripts/cleanup.sh
 actionlint .github/workflows/terraform.yml
 ```
 
-Results for this reference implementation (2026-10-13, Terraform 1.16.5, azurerm 5.9.0): all of the above passed. **No Azure deployment has been run** from this repository: bootstrap, apply and the Apps deployment are untested against a live subscription.
+Results for this reference implementation (2026-10-13, Terraform 1.16.5, azurerm 5.9.0): all of the above passed. The full flow was also run against a live subscription in germanywestcentral: bootstrap, both Terraform stages (stage 3 locally, because the Owner role was constrained), five automatic app releases with commit-tagged images, and `terraform plan` reporting *No changes* after each release.
 
 After a real deployment:
 

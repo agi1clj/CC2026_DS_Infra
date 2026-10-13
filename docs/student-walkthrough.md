@@ -8,45 +8,38 @@ Follow the steps in order. Replace these placeholders everywhere:
 | `<github-user>` | `ana-popescu` |
 | `<initials>` | `ap` (2–5 lowercase letters; the reference uses `agi`) |
 
-**Tools to install first:** Git, Docker Desktop, Azure CLI (`az`), GitHub CLI (`gh`), Terraform ≥ 1.14. On Windows, use WSL2 (Ubuntu) for the bash scripts.
+**Tools to install first:** Git, Docker Desktop, Azure CLI (`az`), GitHub CLI (`gh`), Terraform ≥ 1.14. On Windows, install all of them inside WSL2 (Ubuntu) and run every command there.
+
+**Time:** about 45–60 minutes the first time. **Cost:** the App Service Plan (B1) and the container registry are billed per hour while they exist, even with no traffic; run Step 13 when you are done.
 
 ---
 
-## Step 1 — Create the repositories
-
-On GitHub, create two **private**, empty repositories (no README):
-
-- `CC2026_<LastName>_<FirstName>_Apps`
-- `CC2026_<LastName>_<FirstName>_Infra`
-
-In each repository: *Settings → Collaborators → Add people → `agi1clj`*.
-
-Or with the GitHub CLI:
+## Step 1 — Log in to GitHub (with the `workflow` permission)
 
 ```bash
-gh repo create CC2026_<LastName>_<FirstName>_Apps  --private
-gh repo create CC2026_<LastName>_<FirstName>_Infra --private
+gh auth login --scopes workflow    # GitHub.com → HTTPS → login with a web browser
+gh auth setup-git                  # let git use this login for push/pull
+```
+
+Without the `workflow` scope GitHub rejects any push that contains `.github/workflows/` files. Already logged in? Run `gh auth refresh --scopes workflow`.
+
+## Step 2 — Create your two private repositories from the starter code
+
+Each command creates a **private** repository in your account from the course template and clones it:
+
+```bash
+gh repo create CC2026_<LastName>_<FirstName>_Apps  --private --clone --template agi1clj/CC2026_DS_Applications
+gh repo create CC2026_<LastName>_<FirstName>_Infra --private --clone --template agi1clj/CC2026_DS_Infra
+```
+
+Then add the instructor as collaborator to both:
+
+```bash
 gh api -X PUT repos/<github-user>/CC2026_<LastName>_<FirstName>_Apps/collaborators/agi1clj
 gh api -X PUT repos/<github-user>/CC2026_<LastName>_<FirstName>_Infra/collaborators/agi1clj
 ```
 
-## Step 2 — Clone the repositories and add the starter code
-
-```bash
-git clone https://github.com/<github-user>/CC2026_<LastName>_<FirstName>_Apps.git
-git clone https://github.com/<github-user>/CC2026_<LastName>_<FirstName>_Infra.git
-```
-
-Copy the reference files (from `CC2026_DS_Applications` and `CC2026_DS_Infra`, provided by the instructor) into your two folders. Then commit:
-
-```bash
-cd CC2026_<LastName>_<FirstName>_Apps
-git add . && git commit -m "Add P1 applications" && git push -u origin main
-cd ../CC2026_<LastName>_<FirstName>_Infra
-git add . && git commit -m "Add P1 infrastructure" && git push -u origin main
-```
-
-Pushing the Apps repository already starts its workflows. The *test/build* jobs run; the *deploy* jobs are skipped until `bootstrap.sh` has configured Azure (Step 6).
+The first commit of the Apps repository already starts its workflows. The *test/build* jobs run; the *deploy* jobs are skipped until `bootstrap.sh` has configured Azure (Step 6). Commit messages in this course follow [Conventional Commits](https://www.conventionalcommits.org), e.g. `feat(frontend): add device filter`.
 
 ## Step 3 — Run locally
 
@@ -56,7 +49,7 @@ docker compose up --build
 ```
 
 Open:
-- http://localhost:3000 – the dashboard shows a table of measurements; try the *Device* filter
+- http://localhost:3000 – the dashboard shows summary tiles and a table of measurements; try the *Device* filter
 - http://localhost:8000/api/data – raw JSON
 - http://localhost:8000/docs – interactive API docs; try `GET /api/data/{device_id}` with `device-001` and `device-999`
 
@@ -70,11 +63,12 @@ Stop with `Ctrl+C`, then `docker compose down`.
 - **Docker Compose**: starts several containers together from one file (`docker-compose.yml`), with a shared network.
 - **Ports**: `"3000:8080"` means *host port 3000 → container port 8080*. The backend listens on 8000, Nginx (frontend) on 8080. In Azure, App Service receives HTTPS on 443 and forwards it to the port given by `WEBSITES_PORT`.
 
-## Step 5 — Authenticate to Azure and GitHub
+## Step 5 — Log in to Azure
 
 ```bash
-az login                     # pick the subscription you will use (Azure for Students is fine)
-gh auth login                # GitHub.com → HTTPS → login with a web browser
+az login                     # choose your Azure for Students subscription when asked
+az account show --query "{subscription:name, user:user.name}" -o table
+gh api user --jq .login      # still logged in to GitHub? (prints your user name)
 ```
 
 ## Step 6 — Bootstrap Azure
@@ -105,8 +99,8 @@ az account show --query "{name:name, id:id}"                       # which subsc
 az policy assignment list --disable-scope-strict-match \
   --query "[].parameters.listOfAllowedLocations.value" -o json      # allowed regions
 az quota show --resource-name B1 \
-  --scope "/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.Web/locations/germanywestcentral" \
-  --query properties.limit.value                                      # B1 quota (needs: az extension add -n quota)
+  --scope "/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.Web/locations/<region>" \
+  --query properties.limit.value                                      # B1 quota in <region> (needs: az extension add -n quota)
 az role assignment list --assignee "$(az ad signed-in-user show --query id -o tsv)" \
   --include-inherited --query "[].{role:roleDefinitionName, condition:condition}" -o json
 ```
@@ -121,10 +115,13 @@ Answer the prompts (subscription, GitHub user, the two repository names, your in
 
 What it creates:
 - `rg-cc2026-<initials>-tfstate` with a storage account and a `tfstate` container: where Terraform keeps its state
-- An Entra ID application `github-actions-cc2026-<initials>` with two federated credentials. GitHub Actions on `main` of your two repositories can sign in to Azure with it, without any password
+- An Entra ID application `github-actions-cc2026-<initials>` with federated credentials (two per repository: GitHub uses either a name-based or an ID-based token subject). GitHub Actions on `main` of your two repositories can sign in to Azure with it, without any password
+- If the region's App Service quota is 0: a quota request for 1 B1 instance (usually approved in seconds)
 - Role assignments for that identity (Contributor; AcrPull-only RBAC administration; state access) and state access for you
 - GitHub repository variables in both repositories (*Settings → Secrets and variables → Actions → Variables*)
 - `terraform/environments/dev/backend.hcl` and `terraform.tfvars` (git-ignored), and runs `terraform init`
+
+At the end bootstrap prints the next steps **for your situation**. Note the line `CI_CAN_ASSIGN_ROLES=true` or `false`: it decides how you do Step 7c.
 
 Your answers are saved in `bootstrap/bootstrap.env` (not committed). **Renamed a repository?** Run `./bootstrap/bootstrap.sh` again: it detects the new name (or edit `APPS_REPO` / `INFRA_REPO` in that file) and moves the OIDC trust and the GitHub variables to it. GitHub Actions login fails until you do, because the trust is bound to the exact repository name.
 
@@ -134,33 +131,37 @@ If it stops with a permissions message, show the output to your instructor (READ
 
 A container Web App needs an image, but your registry does not exist yet. The first deployment is therefore done in two Terraform stages (README §11 explains why).
 
-**7a. Registry only.** In the **Infra** repository on GitHub: *Actions → terraform → Run workflow → Run*. Bootstrap set `CREATE_WEB_APPS=false`, so this creates only the resource group and the container registry. Wait for the green check.
+**7a. Registry only (~2 min).** In the **Infra** repository on GitHub: *Actions → terraform → Run workflow → Run*. Bootstrap set `CREATE_WEB_APPS=false`, so this creates only the resource group and the container registry. Wait for the green check.
 
-**7b. Publish the first images.** In the **Apps** repository: *Actions → backend → Run workflow*, then *Actions → frontend → Run workflow*. Both push their images to the registry. The deploy steps are skipped with the notice *"Web App … does not exist yet"*.
+**7b. Publish the first images (~3 min each).** In the **Apps** repository: *Actions → backend → Run workflow*, then *Actions → frontend → Run workflow*. Both push their images to the registry. The deploy steps are skipped with the notice *"Web App … does not exist yet"*. That is expected.
 
-**7c. Create the Web Apps.**
+**7c. Create the Web Apps (~3 min).** First tell Terraform that the Web Apps may now be created (never set this back to `false`):
 
 ```bash
 gh variable set CREATE_WEB_APPS --body true --repo <github-user>/CC2026_<LastName>_<FirstName>_Infra
+gh variable get CI_CAN_ASSIGN_ROLES --repo <github-user>/CC2026_<LastName>_<FirstName>_Infra
 ```
 
-Run *Actions → terraform → Run workflow* again. It checks that both images exist, then creates the App Service Plan, the identity and the two Web Apps. The **Summary** tab shows `frontend_url` and `backend_url`.
+- **`true`**: run *Actions → terraform → Run workflow* again. The **Summary** tab shows `frontend_url` and `backend_url`.
+- **`false`** (your account may assign roles, but not delegate that right to GitHub Actions): create the Web Apps from your laptop. Terraform then runs under your own identity:
 
-If bootstrap printed *"GitHub Actions cannot create role assignments"*, create the Web Apps from your laptop instead (your own account may assign the AcrPull role):
+  ```bash
+  cd terraform/environments/dev
+  terraform apply      # 5 resources to add (or 3 on a retry); type yes
+  terraform output
+  ```
 
-```bash
-cd terraform/environments/dev
-terraform apply      # type yes after reviewing the plan
-terraform output
-```
+  Later CI runs of the *terraform* workflow work normally.
+
+The first start of each container takes 1–3 minutes. Open `<backend_url>/health` until it answers.
 
 ## Step 8 — Deploy the applications
 
-Re-run *backend* and *frontend* in the Apps repository (or push any change to `main`). Each run:
+Re-run *backend* and *frontend* in the Apps repository (or push any change to `main`). Each run takes 3–5 minutes:
 
 `test/build → OIDC login → docker build → push :<sha> → update Web App → wait until /health (or /version.txt) shows <sha>`
 
-From now on, every push to `main` that changes `backend/` or `frontend/` deploys automatically.
+From now on, every push to `main` that changes `backend/` or `frontend/` deploys automatically. Try it: change the `<h1>` title in `frontend/src/App.tsx`, commit, push, wait for the *frontend* run, then reload the page. `<frontend_url>/version.txt` and `<backend_url>/health` show which commit is live.
 
 ## Step 9 — Verify the Azure resources
 
