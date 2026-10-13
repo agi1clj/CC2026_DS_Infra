@@ -1,0 +1,138 @@
+# Terraform CI/CD for the dev environment.
+#   Pull requests / pushes: format check, init (no backend), validate, offline tests. No Azure access.
+#   Manual run (Actions -> terraform -> Run workflow): plan, save the plan, apply that exact plan.
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply the plan (unchecked = plan only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.16.5"
+  WORKING_DIR: terraform/environments/dev
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive terraform
+
+      - name: terraform init (without remote state)
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform validate
+
+      - name: terraform test (mocked provider, creates nothing)
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform test
+
+  deploy:
+    needs: validate
+    # Only a deliberate manual run on main may touch Azure.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required to request the GitHub OIDC token for Azure login
+    concurrency:
+      group: terraform-dev
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    env:
+      # Azure authentication for Terraform (provider and azurerm backend) via OIDC.
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # Terraform input variables: the same values bootstrap.sh wrote to terraform.tfvars.
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+      TF_VAR_student_initials: ${{ vars.STUDENT_INITIALS }}
+      TF_VAR_location: ${{ vars.AZURE_LOCATION }}
+      TF_VAR_app_service_sku: ${{ vars.APP_SERVICE_SKU }}
+      TF_VAR_acr_sku: ${{ vars.ACR_SKU }}
+      TF_VAR_create_web_apps: ${{ vars.CREATE_WEB_APPS || 'true' }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Azure login (OIDC, no secrets)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init (remote state)
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}"
+
+      - name: terraform validate
+        run: terraform validate
+
+      # The Web Apps are created pointing at backend:latest / frontend:latest.
+      # Refuse to create them before the Apps repository has published those images.
+      - name: Check that the first images exist in ACR
+        if: env.TF_VAR_create_web_apps == 'true'
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: |
+          for image in backend:latest frontend:latest; do
+            if ! az acr repository show --name "$ACR_NAME" --image "$image" --output none 2>/dev/null; then
+              echo "::error::Image $image not found in $ACR_NAME. First run this workflow with CREATE_WEB_APPS=false, then let the Apps workflows push the images (see README, 'Initial deployment')."
+              exit 1
+            fi
+          done
+
+      - name: terraform plan
+        run: terraform plan -input=false -out=tfplan
+
+      - name: terraform apply (saved plan)
+        if: inputs.apply
+        run: terraform apply -input=false tfplan
+
+      - name: terraform output
+        if: inputs.apply
+        run: |
+          terraform output
+          {
+            echo "### Terraform outputs"
+            echo '```'
+            terraform output
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

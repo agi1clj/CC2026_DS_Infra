@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars (git-ignored). bootstrap/bootstrap.sh generates this file for you.
+project_name     = "cc2026"
+student_initials = "agi"
+environment      = "dev"
+location         = "westeurope"
+subscription_id  = "00000000-0000-0000-0000-000000000000" # your subscription: az account show --query id -o tsv
+
+app_service_sku = "B1"
+acr_sku         = "Basic"
+
+# create_web_apps defaults to true. Only the very first CI run uses false
+# (GitHub variable CREATE_WEB_APPS); see README > Initial deployment.
