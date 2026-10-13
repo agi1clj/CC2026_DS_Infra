@@ -16,8 +16,9 @@
 #   ./bootstrap/bootstrap.sh --check   # read-only preflight: changes nothing, tells you what will work
 #   ./bootstrap/bootstrap.sh           # runs the same checks, then creates everything
 #
-# Every prompt can be pre-answered with an environment variable, e.g.
-#   STUDENT_INITIALS=agi GITHUB_OWNER=my-user ./bootstrap/bootstrap.sh
+# Answers are saved to bootstrap/bootstrap.env (git-ignored) and reused on the next run.
+# To change something (e.g. after renaming a repository), edit that file or pass an
+# environment variable, then re-run:  APPS_REPO=New_Name ./bootstrap/bootstrap.sh
 #
 # Instructor-assisted mode: if your tenant does not allow you to create app
 # registrations or role assignments, ask your instructor for an application
@@ -28,6 +29,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
 readonly TF_DIR="$REPO_ROOT/terraform/environments/dev"
+readonly SETTINGS_FILE="$REPO_ROOT/bootstrap/bootstrap.env"
+readonly SAVED_SETTINGS=(AZURE_SUBSCRIPTION_ID GITHUB_OWNER APPS_REPO INFRA_REPO STUDENT_INITIALS AZURE_LOCATION)
 
 readonly GITHUB_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 readonly OIDC_AUDIENCE="api://AzureADTokenExchange"
@@ -63,6 +66,37 @@ ask() {
   # `|| true`: with no terminal (CI, piped input) read hits end-of-input; use the default.
   read -r -p "$question${default:+ [$default]}: " answer || true
   printf -v "$var_name" '%s' "${answer:-$default}"
+}
+
+# Loads KEY=value lines from bootstrap.env. Environment variables that are already set win.
+load_settings() {
+  [[ -f "$SETTINGS_FILE" ]] || return 0
+  local key value
+  while IFS='=' read -r key value; do
+    [[ "$key" =~ ^[A-Z_]+$ ]] || continue
+    if [[ -z "${!key:-}" ]]; then
+      printf -v "$key" '%s' "$value"
+    fi
+  done <"$SETTINGS_FILE"
+  info "Loaded saved answers from bootstrap/bootstrap.env"
+}
+
+save_settings() {
+  {
+    echo "# Saved by bootstrap.sh. Edit a value and re-run bootstrap.sh to apply it (e.g. a renamed repository)."
+    local key
+    for key in "${SAVED_SETTINGS[@]}"; do
+      echo "$key=${!key}"
+    done
+  } >"$SETTINGS_FILE"
+}
+
+# Prints "owner repo" of the Infra repository from its git remote (empty if unknown).
+infra_repo_from_git() {
+  local url
+  url="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || true)"
+  [[ "$url" =~ github\.com[:/]([^/]+)/([^/]+)$ ]] || return 0
+  echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]%.git}"
 }
 
 # Retries a command; used where Azure RBAC changes need a minute to propagate.
@@ -126,9 +160,12 @@ select_subscription() {
 
 collect_inputs() {
   info "Project settings"
-  ask GITHUB_OWNER "GitHub user or organization that owns both repositories" "$(gh api user --jq .login)"
-  ask APPS_REPO "Apps repository name" "CC2026_LastName_FirstName_Apps"
-  ask INFRA_REPO "Infra repository name" "CC2026_LastName_FirstName_Infra"
+  # Defaults come from this repository's git remote: <owner>/<name>_Infra -> <name>_Apps.
+  local git_owner="" git_repo=""
+  read -r git_owner git_repo <<<"$(infra_repo_from_git)" || true
+  ask GITHUB_OWNER "GitHub user or organization that owns both repositories" "${git_owner:-$(gh api user --jq .login)}"
+  ask INFRA_REPO "Infra repository name" "${git_repo:-CC2026_LastName_FirstName_Infra}"
+  ask APPS_REPO "Apps repository name" "${INFRA_REPO%_Infra}_Apps"
   ask STUDENT_INITIALS "Your initials (2-5 lowercase letters, used in all resource names)" ""
 
   # Azure for Students subscriptions only allow a few regions (policy "Allowed resource
@@ -181,10 +218,18 @@ problem() {
 }
 
 check_github_repositories() {
-  local repo
-  for repo in "$APPS_REPO" "$INFRA_REPO"; do
-    if gh repo view "$GITHUB_OWNER/$repo" --json name >/dev/null 2>&1; then
-      ok "GitHub repository $GITHUB_OWNER/$repo exists"
+  local var_name repo canonical
+  for var_name in APPS_REPO INFRA_REPO; do
+    repo="${!var_name}"
+    # GitHub redirects renamed repositories, but OIDC tokens carry the *current* name,
+    # so always use the canonical owner/name reported by GitHub.
+    if canonical="$(gh repo view "$GITHUB_OWNER/$repo" --json nameWithOwner --jq .nameWithOwner 2>/dev/null)"; then
+      if [[ "$canonical" != "$GITHUB_OWNER/$repo" ]]; then
+        warn "$GITHUB_OWNER/$repo was renamed/moved to $canonical; using the new name."
+        GITHUB_OWNER="${canonical%%/*}"
+        printf -v "$var_name" '%s' "${canonical#*/}"
+      fi
+      ok "GitHub repository $canonical exists"
     else
       problem "GitHub repository $GITHUB_OWNER/$repo not found. Create it (private) first, or check the name."
     fi
@@ -598,6 +643,7 @@ main() {
 
   check_dependencies
   check_logins
+  load_settings
   select_subscription
   collect_inputs
   run_preflight
@@ -606,6 +652,7 @@ main() {
     exit $?
   fi
   ((PREFLIGHT_PROBLEMS == 0)) || die "Preflight found $PREFLIGHT_PROBLEMS problem(s); fix them first (run with --check to see only the checks)."
+  save_settings
 
   register_resource_providers
   create_state_storage

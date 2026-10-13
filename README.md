@@ -197,6 +197,8 @@ gh auth login
 ./bootstrap/bootstrap.sh
 ```
 
+Answers are saved to `bootstrap/bootstrap.env` (git-ignored; template `bootstrap.env.example`). The Infra repository and owner are detected from `git remote`. After renaming a repository, re-run bootstrap: it follows GitHub's redirect to the new name, updates the federated credential subject and resets the GitHub variables.
+
 `--check` creates nothing and ends with the recommended path (all-CI, or local stage 3). The full run repeats the same checks and stops before creating anything if one fails.
 
 The script asks for: subscription, GitHub owner, both repository names, your initials and a region. Every answer can be pre-set with an environment variable (`STUDENT_INITIALS=agi ./bootstrap/bootstrap.sh`). It is safe to re-run: existing resources are reused and never recreated.

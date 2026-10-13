@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Teaching project (UTCN Cloud Computing). Azure infra for the companion `*_Apps` repository. Keep it simple: no AKS, VNets, Key Vault or extra tooling unless asked.
+Teaching project (UTCN Cloud Computing). Azure infra for the companion Apps repository. Keep it simple: no AKS, VNets, Key Vault or extra tooling unless asked.
 
 ## Layout
 - `terraform/environments/dev/` the only root module (remote state key `dev.tfstate`). Names and tags live in `locals.tf`.
@@ -20,3 +20,4 @@ Teaching project (UTCN Cloud Computing). Azure infra for the companion `*_Apps` 
 - `ignore_changes` covers only `docker_image_name` (Apps CI owns image tags). Never widen it.
 - `CREATE_WEB_APPS` must never go back to `false` once Web Apps exist (it would delete them).
 - New roles Terraform assigns must be added to `ASSIGNABLE_ROLE_IDS` in `bootstrap.sh`; new resource providers to both `bootstrap.sh` and `providers.tf`.
+- Commits follow Conventional Commits: `type(scope): summary` with type in feat, fix, docs, refactor, test, ci, build, chore (e.g. `fix(bootstrap): reuse existing state resource group`).

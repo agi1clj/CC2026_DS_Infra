@@ -11,6 +11,7 @@ crash.*.log
 terraform.tfvars
 *.auto.tfvars
 backend.hcl
+bootstrap/bootstrap.env
 
 # Keep the provider lock file (it pins provider checksums for every platform)
 !.terraform.lock.hcl

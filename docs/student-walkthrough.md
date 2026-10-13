@@ -122,6 +122,8 @@ What it creates:
 - GitHub repository variables in both repositories (*Settings → Secrets and variables → Actions → Variables*)
 - `terraform/environments/dev/backend.hcl` and `terraform.tfvars` (git-ignored), and runs `terraform init`
 
+Your answers are saved in `bootstrap/bootstrap.env` (not committed). **Renamed a repository?** Run `./bootstrap/bootstrap.sh` again: it detects the new name (or edit `APPS_REPO` / `INFRA_REPO` in that file) and moves the OIDC trust and the GitHub variables to it. GitHub Actions login fails until you do, because the trust is bound to the exact repository name.
+
 If it stops with a permissions message, show the output to your instructor (README §8, *Instructor-assisted setup*).
 
 ## Step 7 — Deploy the initial infrastructure
