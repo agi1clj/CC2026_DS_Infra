@@ -1,4 +1,4 @@
-# Architecture – CC2026 P1 Infrastructure
+# Architecture – CC2026 Infrastructure
 
 These diagrams show only what the code creates.
 
@@ -20,7 +20,7 @@ flowchart TB
 
     subgraph sub["Azure subscription"]
         subgraph staterg["rg-cc2026-&lt;initials&gt;-tfstate"]
-            sa[(Storage account<br/>tfstate / p1-dev.tfstate)]
+            sa[(Storage account<br/>tfstate / dev.tfstate)]
         end
         subgraph apprg["rg-cc2026-&lt;initials&gt;-dev"]
             acr[(Container registry Basic)]
@@ -58,7 +58,7 @@ flowchart LR
 
     subgraph azure["«node» Microsoft Azure (one region)"]
         subgraph storage["«node» Storage account (Standard_LRS)"]
-            statefile["«artifact» p1-dev.tfstate"]
+            statefile["«artifact» dev.tfstate"]
         end
         subgraph registry["«node» Container registry (Basic)"]
             images["«artifact» backend:&lt;sha&gt;<br/>«artifact» frontend:&lt;sha&gt;"]

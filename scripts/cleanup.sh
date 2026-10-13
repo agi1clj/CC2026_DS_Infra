@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# CC2026 P1 cleanup: removes what you created, one deliberate step at a time.
+# CC2026 cleanup: removes what you created, one deliberate step at a time.
 #
 #   Step 1  terraform destroy of the application infrastructure (RG, ACR, App Service)
 #   Step 2  (optional) GitHub Actions identity: role assignments + Entra application

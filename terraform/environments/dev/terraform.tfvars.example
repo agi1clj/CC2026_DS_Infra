@@ -2,7 +2,7 @@
 project_name     = "cc2026"
 student_initials = "agi"
 environment      = "dev"
-location         = "westeurope"
+location         = "germanywestcentral"
 subscription_id  = "00000000-0000-0000-0000-000000000000" # your subscription: az account show --query id -o tsv
 
 app_service_sku = "B1"

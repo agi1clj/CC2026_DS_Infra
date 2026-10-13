@@ -1,6 +1,6 @@
-# CC2026 P1 – Infrastructure
+# CC2026 – Infrastructure
 
-Terraform, bootstrap and CI/CD for *Cloud Computing, Project Part 1* (UTCN, 2026–2027). This repository creates the Azure resources that run the applications from the companion repository.
+Terraform, bootstrap and CI/CD for the *Cloud Computing* project (UTCN, 2026–2027). It starts with Project Part 1 and is extended in later parts. This repository creates the Azure resources that run the applications from the companion repository.
 
 > Students: name your copy `CC2026_LastName_FirstName_Infra`. This reference copy is called `CC2026_DS_Infra`.
 > **Start with [docs/student-walkthrough.md](docs/student-walkthrough.md)**. It takes you from zero to working URLs in order.
@@ -10,7 +10,7 @@ Terraform, bootstrap and CI/CD for *Cloud Computing, Project Part 1* (UTCN, 2026
 ```mermaid
 flowchart LR
     subgraph state["rg-cc2026-&lt;initials&gt;-tfstate (bootstrap.sh)"]
-        sa[(Storage account<br/>container tfstate<br/>p1-dev.tfstate)]
+        sa[(Storage account<br/>container tfstate<br/>dev.tfstate)]
     end
     subgraph app["rg-cc2026-&lt;initials&gt;-dev (Terraform)"]
         acr[(ACR Basic)]
@@ -33,7 +33,7 @@ More diagrams (conceptual, UML deployment, CI/CD): [docs/architecture.md](docs/a
 | Resource | Name (initials `agi`) | Created by | Purpose |
 |---|---|---|---|
 | Resource group | `rg-cc2026-agi-tfstate` | bootstrap | Holds Terraform state; outlives `terraform destroy` |
-| Storage account + container `tfstate` | `sttfcc2026agi<6 hex>` | bootstrap | Remote state `p1-dev.tfstate` |
+| Storage account + container `tfstate` | `sttfcc2026agi<6 hex>` | bootstrap | Remote state `dev.tfstate` |
 | Entra application + service principal | `github-actions-cc2026-agi` | bootstrap | Identity used by GitHub Actions |
 | Federated credentials | `github-apps-main`, `github-infra-main` | bootstrap | Trust GitHub OIDC tokens from `main` of each repo |
 | Resource group | `rg-cc2026-agi-dev` | Terraform | Everything below |
@@ -90,8 +90,8 @@ Both come from the same answers you give `bootstrap.sh`, so local and CI runs re
 | `student_initials` | – (required) | 2–5 lowercase letters, e.g. `agi` |
 | `subscription_id` | – (required) | Target subscription (not a secret) |
 | `project_name` | `cc2026` | Name prefix |
-| `environment` | `dev` | Only `dev` is allowed in P1 |
-| `location` | `westeurope` | Azure region |
+| `environment` | `dev` | Only `dev` exists |
+| `location` | `germanywestcentral` | Azure region (must be allowed by the subscription's region policy) |
 | `app_service_sku` | `B1` | Plan SKU (B1 or higher, needed for Always On) |
 | `acr_sku` | `Basic` | Registry SKU |
 | `create_web_apps` | `true` | `false` only for the first apply (see §11) |
@@ -112,7 +112,7 @@ Terraform records what it created in a **state file**. Locally that file would s
 ```text
 storage account  sttfcc2026<initials><hash>   (resource group rg-cc2026-<initials>-tfstate)
 container        tfstate
-blob             p1-dev.tfstate
+blob             dev.tfstate
 ```
 
 - **Bootstrapped outside Terraform.** The storage must exist before `terraform init`, so Terraform cannot create its own backend.
@@ -158,10 +158,19 @@ Granted to the **GitHub Actions identity**:
 | Role | Scope | Why |
 |---|---|---|
 | Contributor | subscription | Terraform creates the app resource group; workflows push images and update Web Apps |
-| Role Based Access Control Administrator, **conditioned to the roles in `ASSIGNABLE_ROLE_IDS` (P1: AcrPull only)** | subscription | Terraform must grant `AcrPull` to the Web Apps' identity. Plain Contributor cannot create role assignments; the condition stops this identity from granting itself or anyone else any other role |
-| Storage Blob Data Contributor | state storage account | Read/write/lock `p1-dev.tfstate` |
+| Role Based Access Control Administrator, **conditioned to the roles in `ASSIGNABLE_ROLE_IDS` (today: AcrPull only)** | subscription | Terraform must grant `AcrPull` to the Web Apps' identity. Plain Contributor cannot create role assignments; the condition stops this identity from granting itself or anyone else any other role |
+| Storage Blob Data Contributor | state storage account | Read/write/lock `dev.tfstate` |
 
 > **Trade-off, stated plainly:** one identity serves both repositories and holds Contributor on the whole subscription. That is acceptable for a personal lab subscription, but it is broader than production practice. A production setup would use one identity per repository and pre-create the resource group, so Contributor could be scoped to it.
+
+### Azure for Students subscriptions
+
+| Constraint | Effect | Handled by |
+|---|---|---|
+| Policy *Allowed resource deployment regions* (e.g. germanywestcentral, francecentral, swedencentral, spaincentral, polandcentral) | Deployments elsewhere fail with `RequestDisallowedByPolicy` | `bootstrap.sh` reads the policy, defaults to an allowed region and rejects others |
+| Fixed credit, no pay-as-you-go | Resources stop when credit runs out | Use B1 + ACR Basic only; run `cleanup.sh` after grading |
+| University tenant may block app registrations | `az ad app create` fails | Instructor-assisted setup below |
+| Owner may be constrained (cannot assign RBAC roles to others) | GitHub identity cannot create AcrPull assignments | Local stage-3 apply (§11) |
 
 ### Instructor-assisted setup
 
@@ -184,8 +193,11 @@ The student then runs `AZURE_CLIENT_ID=<APP_ID> ./bootstrap/bootstrap.sh`. The s
 ```bash
 az login
 gh auth login
+./bootstrap/bootstrap.sh --check   # read-only preflight: regions, B1 availability, app registration, role rights
 ./bootstrap/bootstrap.sh
 ```
+
+`--check` creates nothing and ends with the recommended path (all-CI, or local stage 3). The full run repeats the same checks and stops before creating anything if one fails.
 
 The script asks for: subscription, GitHub owner, both repository names, your initials and a region. Every answer can be pre-set with an environment variable (`STUDENT_INITIALS=agi ./bootstrap/bootstrap.sh`). It is safe to re-run: existing resources are reused and never recreated.
 
@@ -194,7 +206,7 @@ What it does, in order: checks tools and logins → validates the repos and regi
 | Repository | Variables set |
 |---|---|
 | Apps | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`, `RESOURCE_GROUP`, `BACKEND_WEBAPP_NAME`, `FRONTEND_WEBAPP_NAME` |
-| Infra | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`, `PROJECT_NAME`, `STUDENT_INITIALS`, `AZURE_LOCATION`, `APP_SERVICE_SKU`, `ACR_SKU`, `TFSTATE_RESOURCE_GROUP`, `TFSTATE_STORAGE_ACCOUNT`, `CREATE_WEB_APPS` (only if not set yet) |
+| Infra | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`, `PROJECT_NAME`, `STUDENT_INITIALS`, `AZURE_LOCATION`, `APP_SERVICE_SKU`, `ACR_SKU`, `TFSTATE_RESOURCE_GROUP`, `TFSTATE_STORAGE_ACCOUNT`, `CI_CAN_ASSIGN_ROLES`, `CREATE_WEB_APPS` (only if not set yet) |
 
 These are **variables, not secrets**: none of them is sensitive.
 
@@ -220,10 +232,20 @@ A container Web App needs an image to start, but at the beginning the registry d
 |---|---|---|---|
 | 1 | Infra | `bootstrap.sh` sets `CREATE_WEB_APPS=false`; run **terraform** workflow | Resource group + ACR only |
 | 2 | Apps | Push to `main` (or run **backend** and **frontend** manually) | Images `backend:<sha>`, `backend:latest`, `frontend:<sha>`, `frontend:latest` in ACR; deploy step skipped with a notice |
-| 3 | Infra | `gh variable set CREATE_WEB_APPS --body true --repo <owner>/<Infra repo>`, then run **terraform** again | Plan, identity, AcrPull, Web Apps created on `:latest` |
+| 3 | Infra | `gh variable set CREATE_WEB_APPS --body true --repo <owner>/<Infra repo>`, then run **terraform** again. If bootstrap reported `CI_CAN_ASSIGN_ROLES=false`, run `terraform apply` locally instead (see below) | Plan, identity, AcrPull, Web Apps created on `:latest` |
 | 4 | Apps | Re-run **backend** and **frontend** | Web Apps switched to `:<sha>`, `/health` verified |
 
 From then on, every push to `main` in the Apps repo deploys automatically. The Terraform workflow refuses stage 3 if `backend:latest` or `frontend:latest` is missing from ACR.
+
+**When CI may not create role assignments.** Some tenants constrain the Owner role so it cannot delegate role-management roles (Microsoft's recommended "privileged roles" condition). Bootstrap then sets `CI_CAN_ASSIGN_ROLES=false`. Stage 3 runs once on your laptop under your own identity, which may assign AcrPull:
+
+```bash
+cd terraform/environments/dev
+terraform init -backend-config=backend.hcl
+terraform apply      # review: plan, identity, AcrPull, 2 Web Apps
+```
+
+Later CI runs only update resources and pass. The workflow stops with a clear error if a plan would create or delete role assignments.
 
 **Never set `CREATE_WEB_APPS` back to `false`**: the next apply would delete the Web Apps. `bootstrap.sh` does not overwrite it once it exists.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# CC2026 P1 bootstrap: one-time Azure + GitHub setup.
+# CC2026 bootstrap: one-time Azure + GitHub setup.
 #
 # Creates (or reuses, when run again):
 #   1. Terraform remote state: resource group, storage account, "tfstate" container
@@ -13,7 +13,8 @@
 # Usage (from the root of the Infra repository):
 #   az login
 #   gh auth login
-#   ./bootstrap/bootstrap.sh
+#   ./bootstrap/bootstrap.sh --check   # read-only preflight: changes nothing, tells you what will work
+#   ./bootstrap/bootstrap.sh           # runs the same checks, then creates everything
 #
 # Every prompt can be pre-answered with an environment variable, e.g.
 #   STUDENT_INITIALS=agi GITHUB_OWNER=my-user ./bootstrap/bootstrap.sh
@@ -59,7 +60,8 @@ ask() {
   if [[ -n "${!var_name:-}" ]]; then
     return
   fi
-  read -r -p "$question${default:+ [$default]}: " answer
+  # `|| true`: with no terminal (CI, piped input) read hits end-of-input; use the default.
+  read -r -p "$question${default:+ [$default]}: " answer || true
   printf -v "$var_name" '%s' "${answer:-$default}"
 }
 
@@ -104,7 +106,8 @@ check_dependencies() {
 check_logins() {
   info "Checking Azure and GitHub authentication"
   az account show --output none 2>/dev/null || die "Not logged in to Azure. Run: az login"
-  gh auth status >/dev/null 2>&1 || die "Not logged in to GitHub. Run: gh auth login"
+  # `gh auth status` fails if ANY stored account is invalid, so test the active github.com login directly.
+  gh api user --jq .login >/dev/null 2>&1 || die "Not logged in to GitHub. Run: gh auth login"
   ok "Azure CLI and GitHub CLI are authenticated"
 }
 
@@ -127,7 +130,19 @@ collect_inputs() {
   ask APPS_REPO "Apps repository name" "CC2026_LastName_FirstName_Apps"
   ask INFRA_REPO "Infra repository name" "CC2026_LastName_FirstName_Infra"
   ask STUDENT_INITIALS "Your initials (2-5 lowercase letters, used in all resource names)" ""
-  ask AZURE_LOCATION "Azure region" "westeurope"
+
+  # Azure for Students subscriptions only allow a few regions (policy "Allowed resource
+  # deployment regions"). Offer an allowed region as the default and reject others early.
+  local allowed_regions default_region="germanywestcentral"
+  allowed_regions="$(allowed_locations)"
+  if [[ -n "$allowed_regions" ]]; then
+    info "This subscription only allows these regions: $(tr '\n' ' ' <<<"$allowed_regions")"
+    grep -qx "$default_region" <<<"$allowed_regions" || default_region="$(head -n1 <<<"$allowed_regions")"
+  fi
+  ask AZURE_LOCATION "Azure region" "$default_region"
+  if [[ -n "$allowed_regions" ]] && ! grep -qx "$AZURE_LOCATION" <<<"$allowed_regions"; then
+    die "Region '$AZURE_LOCATION' is blocked by a policy on this subscription. Allowed: $(tr '\n' ' ' <<<"$allowed_regions")"
+  fi
 
   PROJECT_NAME="${PROJECT_NAME:-cc2026}"
   APP_SERVICE_SKU="${APP_SERVICE_SKU:-B1}"
@@ -137,36 +152,138 @@ collect_inputs() {
   az account list-locations --query "[?name=='$AZURE_LOCATION'] | [0].name" --output tsv | grep -qx "$AZURE_LOCATION" ||
     die "Unknown Azure region '$AZURE_LOCATION'. List regions with: az account list-locations -o table"
 
-  local repo
-  for repo in "$APPS_REPO" "$INFRA_REPO"; do
-    gh repo view "$GITHUB_OWNER/$repo" --json name >/dev/null 2>&1 ||
-      die "GitHub repository $GITHUB_OWNER/$repo not found (create it first, or check the name)."
-  done
-
   # Names of the bootstrap resources (separate from the application resource group).
   STATE_RESOURCE_GROUP="rg-$PROJECT_NAME-$STUDENT_INITIALS-tfstate"
   STATE_STORAGE_ACCOUNT="sttf$PROJECT_NAME$STUDENT_INITIALS$(short_hash 6 "$AZURE_SUBSCRIPTION_ID-$STUDENT_INITIALS")"
   STATE_STORAGE_ACCOUNT="${STATE_STORAGE_ACCOUNT:0:24}"
   ENTRA_APP_NAME="github-actions-$PROJECT_NAME-$STUDENT_INITIALS"
 
-  ok "Repositories: $GITHUB_OWNER/$APPS_REPO, $GITHUB_OWNER/$INFRA_REPO"
   ok "State storage: $STATE_RESOURCE_GROUP / $STATE_STORAGE_ACCOUNT / $STATE_CONTAINER"
 }
 
-check_permissions() {
-  info "Checking your Azure permissions on the subscription"
+# Prints the regions allowed by an "allowed locations" policy assignment, one per line (empty if none).
+allowed_locations() {
+  az policy assignment list --disable-scope-strict-match \
+    --query "[].parameters.listOfAllowedLocations.value[]" --output tsv 2>/dev/null | sort -u
+}
+
+# ----------------------------------------------------------------------------- preflight (read-only)
+#
+# Each check prints ✓ (fine) or ! (problem + what to do). Results are kept in PREFLIGHT_*
+# variables so the summary can recommend a path. Nothing is created or changed here.
+
+readonly RBAC_ADMIN_ROLE_ID="f58310d9-a9f6-439a-9e8d-f62e7b41a168" # Role Based Access Control Administrator
+PREFLIGHT_PROBLEMS=0
+
+problem() {
+  warn "$*"
+  PREFLIGHT_PROBLEMS=$((PREFLIGHT_PROBLEMS + 1))
+}
+
+check_github_repositories() {
+  local repo
+  for repo in "$APPS_REPO" "$INFRA_REPO"; do
+    if gh repo view "$GITHUB_OWNER/$repo" --json name >/dev/null 2>&1; then
+      ok "GitHub repository $GITHUB_OWNER/$repo exists"
+    else
+      problem "GitHub repository $GITHUB_OWNER/$repo not found. Create it (private) first, or check the name."
+    fi
+  done
+}
+
+check_region() {
+  # Region policy was already enforced in collect_inputs; here: can this region host Linux B1?
+  local b1_regions
+  b1_regions="$(az appservice list-locations --sku "$APP_SERVICE_SKU" --linux-workers-enabled --query "[].name" --output tsv 2>/dev/null |
+    tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+  if grep -qx "$AZURE_LOCATION" <<<"$b1_regions"; then
+    ok "Region $AZURE_LOCATION supports Linux App Service $APP_SERVICE_SKU"
+  else
+    problem "Region $AZURE_LOCATION does not offer Linux App Service $APP_SERVICE_SKU. Choose another region (AZURE_LOCATION=...)."
+  fi
+}
+
+check_app_registration() {
+  if [[ -n "${AZURE_CLIENT_ID:-}" ]]; then
+    ok "Using the existing application $AZURE_CLIENT_ID (instructor-assisted mode)"
+    return
+  fi
+  if [[ -n "$(az ad app list --display-name "$ENTRA_APP_NAME" --query "[0].appId" --output tsv 2>/dev/null)" ]]; then
+    ok "Application $ENTRA_APP_NAME already exists"
+    return
+  fi
+  local allowed
+  allowed="$(az rest --method get --url "https://graph.microsoft.com/v1.0/policies/authorizationPolicy" \
+    --query "defaultUserRolePermissions.allowedToCreateApps" --output tsv 2>/dev/null || echo unknown)"
+  case "$allowed" in
+    true) ok "Your tenant allows users to register applications" ;;
+    false) problem "Your tenant does not let users register applications. Use the instructor-assisted setup (README > Azure permission prerequisites) unless you hold the Application Developer role." ;;
+    *) warn "Could not read the tenant's app-registration policy; bootstrap will try and report the result." ;;
+  esac
+}
+
+check_role_assignment_rights() {
   SIGNED_IN_USER_ID="$(az ad signed-in-user show --query id --output tsv 2>/dev/null || true)"
   [[ -n "$SIGNED_IN_USER_ID" ]] || die "Run this script as a user (az login), not as a service principal."
 
-  local roles
-  roles="$(az role assignment list --assignee "$SIGNED_IN_USER_ID" --include-inherited --include-groups \
-    --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[].roleDefinitionName" --output tsv 2>/dev/null || true)"
+  local assignments
+  assignments="$(az role assignment list --assignee "$SIGNED_IN_USER_ID" --include-inherited --include-groups \
+    --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" \
+    --query "[?roleDefinitionName=='Owner' || roleDefinitionName=='User Access Administrator' || roleDefinitionName=='Role Based Access Control Administrator'].{role:roleDefinitionName, condition:condition}" \
+    --output tsv 2>/dev/null || true)"
 
-  if grep -qxE "Owner|User Access Administrator|Role Based Access Control Administrator" <<<"$roles"; then
-    ok "You can create role assignments (found: $(tr '\n' ' ' <<<"$roles"))"
+  if [[ -z "$assignments" ]]; then
+    problem "You are not Owner / User Access Administrator on this subscription: role assignments will fail. Ask your instructor (README > Instructor-assisted setup)."
+    PREFLIGHT_CI_CAN_ASSIGN_ROLES=false
+    return
+  fi
+
+  ok "You can create role assignments ($(cut -f1 <<<"$assignments" | sort -u | tr '\n' ' '))"
+  # An unconstrained assignment wins; otherwise check whether the condition blocks delegating
+  # the RBAC Administrator role (Microsoft's recommended "privileged roles" condition).
+  if grep -qvE $'\t.+' <<<"$assignments" || ! grep -q "$RBAC_ADMIN_ROLE_ID" <<<"$assignments"; then
+    PREFLIGHT_CI_CAN_ASSIGN_ROLES=true
+    ok "GitHub Actions can be allowed to assign AcrPull (Terraform runs fully in CI)"
   else
-    warn "You do not appear to be Owner/User Access Administrator on this subscription."
-    warn "Role assignments will probably fail; the exact commands will be printed for your instructor."
+    PREFLIGHT_CI_CAN_ASSIGN_ROLES=false
+    warn "Your Owner role is constrained: it cannot delegate role management to GitHub Actions."
+    warn "Not an error: the one Terraform apply that creates the Web Apps will run on your laptop (README > Initial deployment)."
+  fi
+}
+
+check_resource_providers() {
+  local provider state missing=()
+  for provider in "${RESOURCE_PROVIDERS[@]}"; do
+    state="$(az provider show --namespace "$provider" --query registrationState --output tsv 2>/dev/null || echo Unknown)"
+    [[ "$state" == "Registered" ]] || missing+=("$provider")
+  done
+  if ((${#missing[@]} == 0)); then
+    ok "Resource providers are registered"
+  else
+    ok "Resource providers to register (bootstrap does this): ${missing[*]}"
+  fi
+}
+
+run_preflight() {
+  info "Preflight checks (read-only)"
+  check_github_repositories
+  check_region
+  check_app_registration
+  check_role_assignment_rights
+  check_resource_providers
+}
+
+print_preflight_summary() {
+  echo
+  if ((PREFLIGHT_PROBLEMS > 0)); then
+    printf '\033[1;31m%s problem(s) found.\033[0m Fix them (see the ! lines above) and run the check again.\n' "$PREFLIGHT_PROBLEMS"
+    return 1
+  fi
+  printf '\033[1;32mPreflight passed.\033[0m Run ./bootstrap/bootstrap.sh (same answers) to set everything up.\n'
+  if [[ "$PREFLIGHT_CI_CAN_ASSIGN_ROLES" == "false" ]]; then
+    echo "Path: Terraform stage 3 (creating the Web Apps) runs locally; everything else runs in GitHub Actions."
+  else
+    echo "Path: everything runs in GitHub Actions."
   fi
 }
 
@@ -187,9 +304,15 @@ register_resource_providers() {
 
 create_state_storage() {
   info "Creating Terraform state storage"
-  az group create --name "$STATE_RESOURCE_GROUP" --location "$AZURE_LOCATION" \
-    --tags project="$PROJECT_NAME" owner="$STUDENT_INITIALS" purpose=terraform-state --output none
-  ok "Resource group $STATE_RESOURCE_GROUP"
+  if [[ "$(az group exists --name "$STATE_RESOURCE_GROUP")" == "true" ]]; then
+    ok "Resource group $STATE_RESOURCE_GROUP already exists"
+  else
+    az group create --name "$STATE_RESOURCE_GROUP" --location "$AZURE_LOCATION" \
+      --tags project="$PROJECT_NAME" owner="$STUDENT_INITIALS" purpose=terraform-state --output none
+    ok "Resource group $STATE_RESOURCE_GROUP created"
+  fi
+  local state_location
+  state_location="$(az group show --name "$STATE_RESOURCE_GROUP" --query location --output tsv)"
 
   if az storage account show --name "$STATE_STORAGE_ACCOUNT" --resource-group "$STATE_RESOURCE_GROUP" --output none 2>/dev/null; then
     ok "Storage account $STATE_STORAGE_ACCOUNT already exists"
@@ -198,7 +321,7 @@ create_state_storage() {
     az storage account create \
       --name "$STATE_STORAGE_ACCOUNT" \
       --resource-group "$STATE_RESOURCE_GROUP" \
-      --location "$AZURE_LOCATION" \
+      --location "$state_location" \
       --sku Standard_LRS \
       --kind StorageV2 \
       --min-tls-version TLS1_2 \
@@ -330,7 +453,19 @@ assign_github_roles() {
   local role_ids
   role_ids="$(IFS=,; echo "${ASSIGNABLE_ROLE_IDS[*]}")"
   local condition="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {$role_ids})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {$role_ids}))"
+  # Many tenants constrain Owner so it cannot delegate role-management roles (Microsoft's
+  # recommended "privileged roles" condition). That is a security control, not an error:
+  # the Terraform apply that creates role assignments then runs locally under your identity.
+  local before=${#MANUAL_STEPS[@]}
   assign_role "$SP_OBJECT_ID" ServicePrincipal "Role Based Access Control Administrator" "$subscription_scope" "$condition"
+  if ((${#MANUAL_STEPS[@]} > before)); then
+    unset "MANUAL_STEPS[$before]"
+    CI_CAN_ASSIGN_ROLES=false
+    warn "GitHub Actions cannot create role assignments in this subscription."
+    warn "The Terraform apply that creates the Web Apps (AcrPull assignment) must run locally (README > Initial deployment)."
+  else
+    CI_CAN_ASSIGN_ROLES=true
+  fi
 
   # Read and write the Terraform state blob with Entra ID (no storage keys).
   assign_role "$SP_OBJECT_ID" ServicePrincipal "Storage Blob Data Contributor" "$STATE_STORAGE_ID"
@@ -364,7 +499,7 @@ terraform_init() {
   info "Initializing Terraform with the remote state backend"
   (cd "$TF_DIR" && retry 20 30 terraform init -input=false -reconfigure -backend-config=backend.hcl >/dev/null) ||
     die "terraform init failed. Re-run this script in a few minutes (RBAC propagation) or see README > Common errors."
-  ok "terraform init succeeded (state: $STATE_STORAGE_ACCOUNT/$STATE_CONTAINER/p1-dev.tfstate)"
+  ok "terraform init succeeded (state: $STATE_STORAGE_ACCOUNT/$STATE_CONTAINER/dev.tfstate)"
 }
 
 # Resource names come from Terraform itself (locals.tf), so they are defined in one place.
@@ -408,6 +543,7 @@ configure_github_variables() {
   set_github_variable "$INFRA_REPO" ACR_SKU "$ACR_SKU"
   set_github_variable "$INFRA_REPO" TFSTATE_RESOURCE_GROUP "$STATE_RESOURCE_GROUP"
   set_github_variable "$INFRA_REPO" TFSTATE_STORAGE_ACCOUNT "$STATE_STORAGE_ACCOUNT"
+  set_github_variable "$INFRA_REPO" CI_CAN_ASSIGN_ROLES "$CI_CAN_ASSIGN_ROLES"
 
   # First deployment creates only the registry. Never reset this once the Web Apps exist,
   # otherwise the next Terraform run would delete them.
@@ -417,7 +553,7 @@ configure_github_variables() {
     set_github_variable "$INFRA_REPO" CREATE_WEB_APPS false
     ok "$INFRA_REPO: CREATE_WEB_APPS=false (first stage: registry only)"
   fi
-  ok "$INFRA_REPO: AZURE_*, ACR_NAME, PROJECT_NAME, STUDENT_INITIALS, AZURE_LOCATION, *_SKU, TFSTATE_*"
+  ok "$INFRA_REPO: AZURE_*, ACR_NAME, PROJECT_NAME, STUDENT_INITIALS, AZURE_LOCATION, *_SKU, TFSTATE_*, CI_CAN_ASSIGN_ROLES=$CI_CAN_ASSIGN_ROLES"
 }
 
 # ----------------------------------------------------------------------------- summary
@@ -430,6 +566,11 @@ print_summary() {
     exit 2
   fi
 
+  local stage3="run \"terraform\" again                            (creates App Service + Web Apps)"
+  if [[ "$CI_CAN_ASSIGN_ROLES" == "false" ]]; then
+    stage3="cd terraform/environments/dev && terraform apply    (locally: creates App Service + Web Apps)"
+  fi
+
   cat <<EOF
 
 $(printf '\033[1;32m')Bootstrap complete.$(printf '\033[0m')
@@ -438,7 +579,7 @@ Next steps (details in README > "Initial deployment"):
   1. Infra repo  -> GitHub Actions -> "terraform" -> Run workflow   (creates resource group + ACR)
   2. Apps repo   -> push to main (or run "backend" and "frontend")  (pushes the first images)
   3. Infra repo  -> gh variable set CREATE_WEB_APPS --body true --repo $GITHUB_OWNER/$INFRA_REPO
-                 -> run "terraform" again                            (creates App Service + Web Apps)
+                 -> $stage3
   4. Apps repo   -> run "backend" and "frontend" again               (deploys commit-tagged images)
 
 Expected URLs after step 3:
@@ -448,11 +589,24 @@ EOF
 }
 
 main() {
+  local check_only=false
+  case "${1:-}" in
+    --check) check_only=true ;;
+    "") ;;
+    *) die "Unknown option '$1'. Usage: $0 [--check]" ;;
+  esac
+
   check_dependencies
   check_logins
   select_subscription
   collect_inputs
-  check_permissions
+  run_preflight
+  if [[ "$check_only" == "true" ]]; then
+    print_preflight_summary
+    exit $?
+  fi
+  ((PREFLIGHT_PROBLEMS == 0)) || die "Preflight found $PREFLIGHT_PROBLEMS problem(s); fix them first (run with --check to see only the checks)."
+
   register_resource_providers
   create_state_storage
   create_github_identity

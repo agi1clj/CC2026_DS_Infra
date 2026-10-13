@@ -1,6 +1,6 @@
 # Extending the platform (P2, P3 and beyond)
 
-P1 is built so that later project parts **add** services without restructuring what already works. This page lists the extension points and walks through one example. Nothing here is implemented in P1.
+The platform is built so that later project parts **add** services without restructuring what already works. This page lists the extension points and walks through one example. Nothing here is implemented in P1.
 
 | Later part | Likely Azure services (from the course architecture) |
 |---|---|
@@ -94,6 +94,6 @@ P1 is built so that later project parts **add** services without restructuring w
 
 ## Rules that keep the project simple
 
-- One root module and one state for the whole project (`p1-dev.tfstate`). Rename the key only if a later part really needs a separate lifecycle.
+- One root module and one state for the whole project (`dev.tfstate`). Rename the key only if a later part really needs a separate lifecycle.
 - Managed identities and RBAC for service-to-service access. Add Key Vault only if a service truly requires a secret.
 - Keep `create_web_apps` and the image-ownership rules unchanged (README §11).

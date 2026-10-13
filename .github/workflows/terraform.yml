@@ -122,6 +122,17 @@ jobs:
       - name: terraform plan
         run: terraform plan -input=false -out=tfplan
 
+      # If the GitHub identity may not create role assignments (constrained Owner in the
+      # tenant), stop before apply with instructions instead of failing halfway.
+      - name: Check that CI may apply this plan
+        if: vars.CI_CAN_ASSIGN_ROLES == 'false'
+        run: |
+          changes="$(terraform show -json tfplan | jq '[.resource_changes[] | select(.type == "azurerm_role_assignment" and (.change.actions | index("create") or index("delete")))] | length')"
+          if [[ "$changes" != "0" ]]; then
+            echo "::error::This plan creates or deletes role assignments, which this GitHub identity is not allowed to do. Run 'terraform apply' locally (README > Initial deployment), then re-run this workflow."
+            exit 1
+          fi
+
       - name: terraform apply (saved plan)
         if: inputs.apply
         run: terraform apply -input=false tfplan

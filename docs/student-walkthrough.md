@@ -79,12 +79,41 @@ gh auth login                # GitHub.com → HTTPS → login with a web browser
 
 ## Step 6 — Bootstrap Azure
 
+**6a. Check first (changes nothing):**
+
 ```bash
 cd CC2026_<LastName>_<FirstName>_Infra
+./bootstrap/bootstrap.sh --check
+```
+
+It answers, for *your* subscription and tenant:
+
+| Check | What a problem means | What to do |
+|---|---|---|
+| Allowed regions (Azure for Students policy) | You picked a blocked region | Pick one from the list it prints |
+| Linux App Service B1 available in the region | No capacity/offer there | Pick another allowed region |
+| Users may register applications | University tenant blocks it | Instructor-assisted setup (Infra README §8) |
+| You are Owner / can assign roles | Bootstrap cannot grant roles | Ask the instructor |
+| Owner is *constrained* (cannot delegate role management) | Not an error | You will create the Web Apps from your laptop in Step 7c |
+| Resource providers registered | – | Bootstrap registers them |
+
+You can also check by hand:
+
+```bash
+az account show --query "{name:name, id:id}"                       # which subscription
+az policy assignment list --disable-scope-strict-match \
+  --query "[].parameters.listOfAllowedLocations.value" -o json      # allowed regions
+az role assignment list --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --include-inherited --query "[].{role:roleDefinitionName, condition:condition}" -o json
+```
+
+**6b. Run it:**
+
+```bash
 ./bootstrap/bootstrap.sh
 ```
 
-Answer the prompts (subscription, GitHub user, the two repository names, your initials, region `westeurope` or another allowed region).
+Answer the prompts (subscription, GitHub user, the two repository names, your initials, region: bootstrap shows the regions your Azure for Students subscription allows and proposes one).
 
 What it creates:
 - `rg-cc2026-<initials>-tfstate` with a storage account and a `tfstate` container: where Terraform keeps its state
@@ -110,6 +139,14 @@ gh variable set CREATE_WEB_APPS --body true --repo <github-user>/CC2026_<LastNam
 ```
 
 Run *Actions → terraform → Run workflow* again. It checks that both images exist, then creates the App Service Plan, the identity and the two Web Apps. The **Summary** tab shows `frontend_url` and `backend_url`.
+
+If bootstrap printed *"GitHub Actions cannot create role assignments"*, create the Web Apps from your laptop instead (your own account may assign the AcrPull role):
+
+```bash
+cd terraform/environments/dev
+terraform apply      # type yes after reviewing the plan
+terraform output
+```
 
 ## Step 8 — Deploy the applications
 

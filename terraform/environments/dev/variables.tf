@@ -24,14 +24,14 @@ variable "environment" {
 
   validation {
     condition     = contains(["dev"], var.environment)
-    error_message = "Project Part 1 only uses the dev environment."
+    error_message = "Only the dev environment exists; add a new environments/<name> folder for others."
   }
 }
 
 variable "location" {
-  description = "Azure region, e.g. westeurope. Azure for Students subscriptions may only allow some regions."
+  description = "Azure region. Azure for Students subscriptions only allow a few regions (bootstrap.sh checks the policy)."
   type        = string
-  default     = "westeurope"
+  default     = "germanywestcentral"
 }
 
 variable "project_name" {

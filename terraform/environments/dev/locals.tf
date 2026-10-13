@@ -18,7 +18,7 @@ locals {
     project     = var.project_name
     environment = var.environment
     owner       = var.student_initials
-    course      = "UTCN Cloud Computing P1"
+    course      = "UTCN Cloud Computing"
     managed_by  = "terraform"
   }
 }
