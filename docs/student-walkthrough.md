@@ -8,9 +8,17 @@ Follow the steps in order. Replace these placeholders everywhere:
 | `<github-user>` | `ana-popescu` |
 | `<initials>` | `ap` (2–5 lowercase letters; the reference uses `agi`) |
 
-**Tools to install first:** Git, Docker Desktop, Azure CLI (`az`), GitHub CLI (`gh`), Terraform ≥ 1.14. On Windows, install all of them inside WSL2 (Ubuntu) and run every command there.
+**Tools to install first:** Git, Docker Desktop, Azure CLI (`az`), GitHub CLI (`gh`), Terraform ≥ 1.14.
 
-**Time:** about 45–60 minutes the first time. **Cost:** the App Service Plan (B1) and the container registry are billed per hour while they exist, even with no traffic; run Step 13 when you are done.
+**Windows:** install all tools inside WSL2 (Ubuntu) and run every command there. In Docker Desktop enable *Settings → Resources → WSL integration* for Ubuntu. Clone the repositories inside your WSL home folder (`cd ~`), not under `/mnt/c/...`: that is slow and can drop the executable bit of `bootstrap.sh`. If `az login` or `gh auth login` cannot open a browser, use `az login --use-device-code` and follow the link.
+
+**Folders:** Step 2 clones both repositories side by side in the current folder. Each step says which repository folder to be in; blocks that enter `terraform/environments/dev` return to the repository root at the end.
+
+**macOS (zsh):** many commands below end with a `# comment`. Default zsh passes `#` and the words after it to the command instead of ignoring them. Run `setopt interactivecomments` once (add it to `~/.zshrc` to keep it), or copy only the part before `#`.
+
+**Time:** about 45–60 minutes the first time.
+
+**Cost:** about €16 per month: the App Service Plan B1 (≈ €12) plus the container registry (≈ €4.5), billed per hour while they exist, even with no traffic and even when the apps are stopped. The Azure for Students credit covers this until the final evaluation in January. **Keep everything running until then:** Parts 2, 3 and the final project build on this same infrastructure. Clean up only at the very end (Step 13).
 
 ---
 
@@ -71,12 +79,14 @@ az account show --query "{subscription:name, user:user.name}" -o table
 gh api user --jq .login      # still logged in to GitHub? (prints your user name)
 ```
 
+Check your credit before you create anything: Azure portal → search **Education** → *Overview* shows the remaining Azure for Students credit and its expiry date. It must last until the end of January. If you activated it a year ago for another course, it may expire earlier; tell your instructor. When the credit runs out, Azure disables the subscription and your apps go offline (you are not charged).
+
 ## Step 6 — Bootstrap Azure
 
 **6a. Check first (changes nothing):**
 
 ```bash
-cd CC2026_<LastName>_<FirstName>_Infra
+cd ../CC2026_<LastName>_<FirstName>_Infra     # from the Apps folder of Step 3
 ./bootstrap/bootstrap.sh --check
 ```
 
@@ -149,6 +159,7 @@ gh variable get CI_CAN_ASSIGN_ROLES --repo <github-user>/CC2026_<LastName>_<Firs
   cd terraform/environments/dev
   terraform apply      # 5 resources to add (or 3 on a retry); type yes
   terraform output
+  cd ../../..
   ```
 
   Later CI runs of the *terraform* workflow work normally.
@@ -175,15 +186,18 @@ az webapp list --resource-group rg-cc2026-<initials>-dev --query "[].{name:name,
 
 ## Step 10 — Test the deployed applications
 
+In the Infra repository folder:
+
 ```bash
 cd terraform/environments/dev
 BACKEND=$(terraform output -raw backend_url)
 FRONTEND=$(terraform output -raw frontend_url)
+cd ../../..
 
 curl "$BACKEND/health"               # {"status":"ok", "version":"<commit sha>" ...}
 curl "$BACKEND/api/data"             # JSON list
 curl "$BACKEND/api/data/device-001"  # one device
-curl -i "$BACKEND/api/data/nope"     # 404
+curl -i "$BACKEND/api/data/nope"     # 404 (unknown device)
 curl "$FRONTEND/config.js"           # contains your backend URL
 ```
 
@@ -192,7 +206,7 @@ Open the frontend URL in a browser: the table must show the data. Open the brows
 ## Step 11 — Inspect CI/CD
 
 GitHub → *Actions* → open a **backend** run:
-- **Trigger**: `push` on `main` (only when `backend/**` changed) or a manual run
+- **Trigger**: `push` on `main` (only when `backend/**`, `scripts/wait-for-version.sh` or the workflow file changed) or a manual run
 - **Job `test`**: installs dependencies and runs pytest; on a pull request only this job runs
 - **Job `deploy`** (`needs: test`): OIDC login, image build and push to ACR (tags `<sha>` and `latest`), Web App update, health verification
 - **Runner**: `ubuntu-latest`, a fresh VM provided by GitHub for each job
@@ -201,6 +215,8 @@ Compare *build* (creating the image) with *release* (switching the Web App to th
 
 ## Step 12 — Review Terraform
 
+In the Infra repository folder:
+
 ```bash
 cd terraform/environments/dev
 terraform init -backend-config=backend.hcl   # downloads the provider, connects to the remote state
@@ -208,22 +224,24 @@ terraform fmt -check -recursive ../..        # checks formatting (no output = OK
 terraform validate                           # checks syntax and references
 terraform plan                               # compares code with real resources; should say "No changes"
 terraform output                             # prints names and URLs
+cd ../../..
 ```
 
 Look at `locals.tf` (names, tags), `main.tf` (resource group + 2 modules), `modules/app-service/main.tf` (Web Apps, ports, CORS, identity).
 
 ## Step 13 — Cleanup
 
-When the project has been graded:
+**Only after the final evaluation (January).** Parts 2, 3 and the final project extend this same infrastructure; if you delete it after Part 1, you have to bootstrap and deploy everything again.
+
+In the Infra repository folder:
 
 ```bash
-cd CC2026_<LastName>_<FirstName>_Infra
 ./scripts/cleanup.sh
 ```
 
 | What | Effect | When |
 |---|---|---|
-| Destroy application infrastructure (step 1 of the script) | Deletes `rg-cc2026-<initials>-dev`; **stops the costs** | After grading |
+| Destroy application infrastructure (step 1 of the script) | Deletes `rg-cc2026-<initials>-dev`; **stops the costs** | After the final evaluation |
 | Remove role assignments | The GitHub identity loses access to your subscription | Optional, step 2 |
 | Delete the Entra application | Federated credentials disappear; workflows can no longer log in | Optional, step 2 |
 | Delete the state storage | Removes `rg-cc2026-<initials>-tfstate`; only allowed when the state is empty | Optional, step 3 |
@@ -239,4 +257,4 @@ Submit:
 - The README documentation
 - Evidence of successful GitHub Actions runs: links to green runs of `backend`, `frontend` and `terraform` (or screenshots of the *Actions* tab)
 
-Be ready to explain: IaaS vs PaaS vs SaaS (App Service is PaaS), REST and HTTP status codes, workflow triggers / jobs / runners, build vs release, environment variables (`API_BASE_URL`, `CORS_ORIGINS`), and CI/CD.
+Be ready to explain: IaaS vs PaaS vs SaaS (App Service is PaaS), REST and HTTP status codes, workflow triggers / jobs / runners, build vs release, environment variables (`API_BASE_URL`, `CORS_ORIGINS`), CI/CD, Terraform (state, `plan` vs `apply`, variables and outputs), Docker images and the container registry, and how GitHub Actions signs in to Azure without a password (OIDC).

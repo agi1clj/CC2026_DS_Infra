@@ -173,13 +173,16 @@ Granted to the **GitHub Actions identity**:
 |---|---|---|
 | Policy *Allowed resource deployment regions* (e.g. germanywestcentral, francecentral, swedencentral, spaincentral, polandcentral) | Deployments elsewhere fail with `RequestDisallowedByPolicy` | `bootstrap.sh` reads the policy, defaults to an allowed region and rejects others |
 | App Service quota 0 in some regions (`B1 VMs` limit) | Plan creation fails: *Operation cannot be completed without additional quota* | Preflight reads the quota; bootstrap requests 1 instance via the Quota API |
-| Fixed credit, no pay-as-you-go | Resources stop when credit runs out | Use B1 + ACR Basic only; run `cleanup.sh` after grading |
+| Fixed credit, no pay-as-you-go | Resources stop when credit runs out | Use B1 + ACR Basic only; run `cleanup.sh` after the final evaluation |
 | University tenant may block app registrations | `az ad app create` fails | Instructor-assisted setup below |
 | Owner may be constrained (cannot assign RBAC roles to others) | GitHub identity cannot create AcrPull assignments | Local stage-3 apply (§11) |
 
 ### Instructor-assisted setup
 
-Many university tenants block app registrations or role assignments for students. `bootstrap.sh` detects this. It stops with a clear message, or prints the exact commands it could not run (exit code 2). An administrator then does this once per student:
+Some university tenants block app registrations for students. `bootstrap.sh --check` detects this. Two cases:
+
+- **You cannot create role assignments** (not Owner, User Access Administrator or RBAC Administrator on the subscription): bootstrap stops at the preflight. This is a hard requirement. Ask the instructor to give you one of these roles on *your* subscription, then run bootstrap again. (With Azure for Students you are normally the Owner of your subscription.)
+- **You cannot register applications:** an administrator creates the application once per student (below). If another step fails later (e.g. a federated credential), bootstrap prints the exact commands it could not run and exits with code 2.
 
 ```bash
 # 1. Application + service principal
@@ -188,10 +191,9 @@ az ad sp create --id "$APP_ID"
 # 2. Federated credentials (repeat for the Apps and Infra repositories)
 az ad app federated-credential create --id "$APP_ID" --parameters \
   '{"name":"github-infra-main","issuer":"https://token.actions.githubusercontent.com","subject":"repo:<owner>/<Infra repo>:ref:refs/heads/main","audiences":["api://AzureADTokenExchange"]}'
-# 3. Role assignments: print them by running bootstrap.sh as the student; it lists the exact commands.
 ```
 
-The student then runs `AZURE_CLIENT_ID=<APP_ID> ./bootstrap/bootstrap.sh`. The script reuses the identity and still configures everything the student is allowed to do.
+The student then runs `AZURE_CLIENT_ID=<APP_ID> ./bootstrap/bootstrap.sh`. The script reuses that application and does everything else itself (role assignments, state storage, GitHub variables), which works because the student can create role assignments.
 
 ## 9. Bootstrap execution
 
@@ -282,7 +284,8 @@ terraform fmt -check -recursive terraform
 cd terraform/environments/dev
 terraform init -backend=false
 terraform validate
-terraform test                 # 3 offline tests with a mocked azurerm provider
+terraform test                 # 5 offline tests with a mocked azurerm provider
+cd ../../..
 shellcheck bootstrap/bootstrap.sh scripts/cleanup.sh
 actionlint .github/workflows/terraform.yml
 ```
@@ -300,6 +303,8 @@ curl "$(terraform output -raw frontend_url)/config.js"
 
 ## 14. Resource cleanup
 
+Run this only after the **final** evaluation: Parts 2, 3 and the final project extend the same infrastructure.
+
 ```bash
 ./scripts/cleanup.sh
 ```
@@ -316,12 +321,16 @@ If step 1 fails, the script stops and never touches the state. GitHub variables 
 
 | Resource | Billing model | Note |
 |---|---|---|
-| App Service Plan B1 (Linux) | **per hour while the plan exists**, even with zero traffic or stopped apps | The main cost. Delete it (`cleanup.sh`) when you are done |
+| App Service Plan B1 (Linux) | **per hour while the plan exists**, even with zero traffic or stopped apps | The main cost (≈ €12/month). Delete it (`cleanup.sh`) after the final evaluation |
 | ACR Basic | fixed daily rate + storage | Small but continuous |
 | Storage account (state) | per GB + transactions | Negligible (a few KB) |
 | Entra app, identity, role assignments | free | – |
 
-Check current prices for your region in the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/); this document does not hard-code prices. Azure for Students credit covers this setup for the duration of the project if you clean up afterwards. Free (F1) plans are not used because they do not support Always On.
+Prices in this table are approximate retail prices (germanywestcentral, October 2026); check the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) for your region. The setup costs about €16 per month; the Azure for Students credit covers it until the final evaluation.
+
+**Credit running low?** Ask your instructor first. You can then pause the Web Apps: `gh variable set CREATE_WEB_APPS --body false --repo <owner>/<Infra repo>` and run the **terraform** workflow (deletes the plan and Web Apps, keeps ACR, images and state; ≈ €4.5/month). To resume, set it back to `true`, run **terraform**, then re-run **backend** and **frontend**. The URLs stay the same. If `CI_CAN_ASSIGN_ROLES=false`, run `terraform apply -var create_web_apps=false` (pause) and `terraform apply` (resume) locally instead.
+
+Stopping a Web App or turning off Always On on B1 saves nothing: B1 is billed per hour while the plan exists.
 
 ## 16. Extending (P2/P3)
 
