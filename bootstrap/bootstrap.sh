@@ -30,7 +30,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
 readonly TF_DIR="$REPO_ROOT/terraform/environments/dev"
 readonly SETTINGS_FILE="$REPO_ROOT/bootstrap/bootstrap.env"
-readonly SAVED_SETTINGS=(AZURE_SUBSCRIPTION_ID GITHUB_OWNER APPS_REPO INFRA_REPO STUDENT_INITIALS AZURE_LOCATION)
+readonly SAVED_SETTINGS=(AZURE_SUBSCRIPTION_ID GITHUB_OWNER APPS_REPO INFRA_REPO STUDENT_INITIALS AZURE_LOCATION APP_SERVICE_SKU ACR_SKU)
 
 readonly GITHUB_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 readonly OIDC_AUDIENCE="api://AzureADTokenExchange"
@@ -132,7 +132,7 @@ check_dependencies() {
   info "Checking required tools"
   local tool
   for tool in az gh terraform git; do
-    command -v "$tool" >/dev/null 2>&1 || die "'$tool' is not installed. See README > Prerequisites."
+    command -v "$tool" >/dev/null 2>&1 || die "'$tool' is not installed. See docs/student-walkthrough.md > Tools to install first."
   done
   ok "az, gh, terraform and git are installed"
 }
