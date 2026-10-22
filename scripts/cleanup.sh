@@ -3,7 +3,7 @@
 # CC2026 cleanup: removes what you created, one deliberate step at a time.
 #
 #   Step 1  terraform destroy of the application infrastructure (RG, ACR, App Service)
-#   Step 2  (optional) GitHub Actions identity: role assignments + Entra application
+#   Step 2  (optional) GitHub Actions identity: role assignments + managed identity
 #   Step 3  (optional) Terraform state storage (only after step 1 succeeded)
 #
 # Every step shows what will be deleted and asks for confirmation.
@@ -56,7 +56,7 @@ load_settings() {
   SUBSCRIPTION_ID="$(hcl_value "$TF_DIR/terraform.tfvars" subscription_id)"
   PROJECT_NAME="$(hcl_value "$TF_DIR/terraform.tfvars" project_name)"
   STUDENT_INITIALS="$(hcl_value "$TF_DIR/terraform.tfvars" student_initials)"
-  ENTRA_APP_NAME="github-actions-$PROJECT_NAME-$STUDENT_INITIALS"
+  GITHUB_IDENTITY_NAME="github-actions-$PROJECT_NAME-$STUDENT_INITIALS"
 
   az account show --output none 2>/dev/null || die "Not logged in to Azure. Run: az login"
   az account set --subscription "$SUBSCRIPTION_ID"
@@ -102,37 +102,34 @@ destroy_application_infrastructure() {
 
 remove_github_identity() {
   info "Step 2 (optional): remove the GitHub Actions identity"
-  local client_id
-  client_id="$(az ad app list --display-name "$ENTRA_APP_NAME" --query "[0].appId" --output tsv)"
-  if [[ -z "$client_id" ]]; then
-    ok "No application named $ENTRA_APP_NAME (instructor-managed identities are not touched)"
+  local principal_id
+  if ! principal_id="$(az identity show --resource-group "$STATE_RESOURCE_GROUP" --name "$GITHUB_IDENTITY_NAME" \
+    --query principalId --output tsv 2>/dev/null)"; then
+    ok "No managed identity $GITHUB_IDENTITY_NAME in $STATE_RESOURCE_GROUP"
     return
   fi
 
-  local sp_id
-  sp_id="$(az ad sp show --id "$client_id" --query id --output tsv 2>/dev/null || true)"
-  if [[ -n "$sp_id" ]]; then
-    echo "Role assignments of $ENTRA_APP_NAME:"
-    az role assignment list --assignee "$sp_id" --all --query "[].{role:roleDefinitionName, scope:scope}" --output table
-  fi
-  echo "Application: $ENTRA_APP_NAME ($client_id)"
+  echo "Role assignments of $GITHUB_IDENTITY_NAME:"
+  az role assignment list --assignee-object-id "$principal_id" --fill-principal-name false --all \
+    --query "[].{role:roleDefinitionName, scope:scope}" --output table
+  echo "Managed identity: $GITHUB_IDENTITY_NAME (resource group $STATE_RESOURCE_GROUP)"
 
-  if ! confirm "Delete these role assignments and the application? GitHub Actions will no longer be able to sign in to Azure."; then
+  if ! confirm "Delete these role assignments and the identity? GitHub Actions will no longer be able to sign in to Azure."; then
     ok "Skipped"
     return
   fi
 
-  if [[ -n "$sp_id" ]]; then
-    local assignment_ids
-    assignment_ids="$(az role assignment list --assignee "$sp_id" --all --query "[].id" --output tsv)"
-    if [[ -n "$assignment_ids" ]]; then
-      # shellcheck disable=SC2086 # one ID per word is intended
-      az role assignment delete --ids $assignment_ids --output none
-    fi
-    ok "Role assignments removed"
+  # The role assignments are at subscription scope: deleting only the identity (or its
+  # resource group in step 3) would leave them orphaned.
+  local assignment_ids
+  assignment_ids="$(az role assignment list --assignee-object-id "$principal_id" --fill-principal-name false --all --query "[].id" --output tsv)"
+  if [[ -n "$assignment_ids" ]]; then
+    # shellcheck disable=SC2086 # one ID per word is intended
+    az role assignment delete --ids $assignment_ids --output none
   fi
-  az ad app delete --id "$client_id"
-  ok "Application $ENTRA_APP_NAME deleted (its federated credentials are deleted with it)"
+  ok "Role assignments removed"
+  az identity delete --resource-group "$STATE_RESOURCE_GROUP" --name "$GITHUB_IDENTITY_NAME"
+  ok "Managed identity $GITHUB_IDENTITY_NAME deleted (its federated credentials are deleted with it)"
   warn "GitHub repository variables were not changed. Remove them in each repository's Settings > Variables if you want."
 }
 

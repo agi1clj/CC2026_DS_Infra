@@ -5,7 +5,7 @@ Teaching project (UTCN Cloud Computing). Azure infra for the companion Apps repo
 ## Layout
 - `terraform/environments/dev/` the only root module (remote state key `dev.tfstate`). Names and tags live in `locals.tf`.
 - `terraform/modules/<service>/` one small module per service (`main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`).
-- `bootstrap/bootstrap.sh` one-time state storage, Entra app + OIDC, roles, GitHub variables. `scripts/cleanup.sh` deliberate teardown.
+- `bootstrap/bootstrap.sh` one-time state storage, GitHub Actions managed identity + OIDC, roles, GitHub variables. `scripts/cleanup.sh` deliberate teardown.
 - How to add services: `docs/extending.md`.
 
 ## Verify before finishing (no Azure needed)

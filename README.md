@@ -21,7 +21,7 @@ flowchart LR
         end
         id -.- be & fe
     end
-    entra[Entra ID app<br/>+ federated credentials] -. OIDC .- gh[GitHub Actions]
+    entra[Managed identity<br/>+ federated credentials] -. OIDC .- gh[GitHub Actions]
     gh -- terraform --> app
     gh -- state --> sa
 ```
@@ -34,7 +34,7 @@ More diagrams (conceptual, UML deployment, CI/CD): [docs/architecture.md](docs/a
 |---|---|---|---|
 | Resource group | `rg-cc2026-agi-tfstate` | bootstrap | Holds Terraform state; outlives `terraform destroy` |
 | Storage account + container `tfstate` | `sttfcc2026agi<6 hex>` | bootstrap | Remote state `dev.tfstate` |
-| Entra application + service principal | `github-actions-cc2026-agi` | bootstrap | Identity used by GitHub Actions |
+| User-assigned managed identity (in the state RG) | `github-actions-cc2026-agi` | bootstrap | Identity used by GitHub Actions |
 | Federated credentials | `github-apps-main(-ids)`, `github-infra-main(-ids)` | bootstrap | Trust GitHub OIDC tokens from `main` of each repo (name-based and ID-based subject) |
 | Resource group | `rg-cc2026-agi-dev` | Terraform | Everything below |
 | Container registry (Basic) | `acrcc2026agidev<4 hex>` | Terraform | Stores `backend` and `frontend` images |
@@ -134,7 +134,7 @@ GitHub Actions signs in to Azure **without any stored password**:
 
 1. The job requests an OIDC token from GitHub (`permissions: id-token: write`). The token says, for example, *"repo `owner/CC2026_..._Infra`, ref `refs/heads/main`"*.
 2. `azure/login` (and Terraform via `ARM_USE_OIDC=true`) exchanges it with Entra ID for an Azure token.
-3. Entra ID accepts it only if a **federated credential** on the application matches issuer, audience and subject exactly.
+3. Entra ID accepts it only if a **federated credential** on the managed identity matches issuer, audience and subject exactly.
 
 | Federated credential | Subject |
 |---|---|
@@ -155,7 +155,6 @@ Required for **you** (the person running `bootstrap.sh`):
 |---|---|
 | Register resource providers, create the state RG/storage | Contributor (or Owner) on the subscription |
 | Create role assignments | **Owner**, User Access Administrator or RBAC Administrator |
-| Create the Entra application | "Users can register applications" enabled in the tenant, or Application Developer role |
 
 Granted to the **GitHub Actions identity**:
 
@@ -174,33 +173,21 @@ Granted to the **GitHub Actions identity**:
 | Policy *Allowed resource deployment regions* (e.g. germanywestcentral, francecentral, swedencentral, spaincentral, polandcentral) | Deployments elsewhere fail with `RequestDisallowedByPolicy` | `bootstrap.sh` reads the policy, defaults to an allowed region and rejects others |
 | App Service quota 0 in some regions (`B1 VMs` limit) | Plan creation fails: *Operation cannot be completed without additional quota* | Preflight reads the quota; bootstrap requests 1 instance via the Quota API |
 | Fixed credit, no pay-as-you-go | Resources stop when credit runs out | Use B1 + ACR Basic only; run `cleanup.sh` after the final evaluation |
-| University tenant may block app registrations | `az ad app create` fails | Instructor-assisted setup below |
+| University tenant blocks app registrations | No Entra application possible | Bootstrap uses a user-assigned managed identity (below) |
 | Owner may be constrained (cannot assign RBAC roles to others) | GitHub identity cannot create AcrPull assignments | Local stage-3 apply (§11) |
 
-### Instructor-assisted setup
+### Why a managed identity (no Microsoft Entra permissions needed)
 
-Some university tenants block app registrations for students. `bootstrap.sh --check` detects this. Two cases:
+Azure for Students subscriptions live in the university's tenant, which usually blocks app registrations for students (you may not even see Microsoft Entra ID in the portal). So GitHub Actions signs in as a **user-assigned managed identity** `github-actions-cc2026-<initials>` in `rg-cc2026-<initials>-tfstate`, never an Entra application. A managed identity is an Azure resource: creating it, its GitHub federated credentials and its role assignments needs only Owner on your subscription. Bootstrap does not call Microsoft Graph at all.
 
-- **You cannot create role assignments** (not Owner, User Access Administrator or RBAC Administrator on the subscription): bootstrap stops at the preflight. This is a hard requirement. Ask the instructor to give you one of these roles on *your* subscription, then run bootstrap again. (With Azure for Students you are normally the Owner of your subscription.)
-- **You cannot register applications:** an administrator creates the application once per student (below). If another step fails later (e.g. a federated credential), bootstrap prints the exact commands it could not run and exits with code 2.
-
-```bash
-# 1. Application + service principal
-APP_ID=$(az ad app create --display-name github-actions-cc2026-<initials> --query appId -o tsv)
-az ad sp create --id "$APP_ID"
-# 2. Federated credentials (repeat for the Apps and Infra repositories)
-az ad app federated-credential create --id "$APP_ID" --parameters \
-  '{"name":"github-infra-main","issuer":"https://token.actions.githubusercontent.com","subject":"repo:<owner>/<Infra repo>:ref:refs/heads/main","audiences":["api://AzureADTokenExchange"]}'
-```
-
-The student then runs `AZURE_CLIENT_ID=<APP_ID> ./bootstrap/bootstrap.sh`. The script reuses that application and does everything else itself (role assignments, state storage, GitHub variables), which works because the student can create role assignments.
+The one hard requirement is Owner (or User Access Administrator / RBAC Administrator) on *your* subscription; bootstrap stops at the preflight without it. With Azure for Students you are normally the Owner. If not, ask the instructor. If a later step fails (e.g. a federated credential), bootstrap prints the exact commands it could not run and exits with code 2.
 
 ## 9. Bootstrap execution
 
 ```bash
 az login
 gh auth login --scopes workflow   # 'workflow' is needed to push .github/workflows files
-./bootstrap/bootstrap.sh --check   # read-only preflight: regions, B1 availability + quota, app registration, role rights
+./bootstrap/bootstrap.sh --check   # read-only preflight: regions, B1 availability + quota, role rights
 ./bootstrap/bootstrap.sh
 ```
 
@@ -210,7 +197,7 @@ Answers are saved to `bootstrap/bootstrap.env` (git-ignored; template `bootstrap
 
 The script asks for: subscription, GitHub owner, both repository names, your initials and a region. Every answer can be pre-set with an environment variable (`STUDENT_INITIALS=agi ./bootstrap/bootstrap.sh`). It is safe to re-run: existing resources are reused and never recreated.
 
-What it does, in order: checks tools and logins → validates the repos and region → checks your permissions → registers resource providers → creates state RG, storage account (versioning, soft delete, no shared keys) and `tfstate` container → creates or reuses the Entra app and service principal → adds two federated credentials → assigns the three roles above → writes `backend.hcl` and `terraform.tfvars` → runs `terraform init` → reads resource names from Terraform → sets the GitHub variables below.
+What it does, in order: checks tools and logins → validates the repos and region → checks your permissions → registers resource providers → creates state RG, storage account (versioning, soft delete, no shared keys) and `tfstate` container → creates or reuses the managed identity → adds two federated credentials → assigns the three roles above → writes `backend.hcl` and `terraform.tfvars` → runs `terraform init` → reads resource names from Terraform → sets the GitHub variables below.
 
 | Repository | Variables set |
 |---|---|
@@ -312,7 +299,7 @@ Run this only after the **final** evaluation: Parts 2, 3 and the final project e
 | Step | What is deleted | Confirmation |
 |---|---|---|
 | 1 | Application infrastructure via `terraform plan -destroy` + apply of that plan; verifies the RG is gone | type `yes` after seeing the plan |
-| 2 (optional) | Role assignments of the GitHub identity + Entra app (and its federated credentials) | type `yes` |
+| 2 (optional) | Role assignments of the GitHub identity + the managed identity (and its federated credentials) | type `yes` |
 | 3 (optional) | State resource group, only if the state is empty | type `yes` |
 
 If step 1 fails, the script stops and never touches the state. GitHub variables are left as they are; remove them in the repository settings if you want.
@@ -324,7 +311,7 @@ If step 1 fails, the script stops and never touches the state. GitHub variables 
 | App Service Plan B1 (Linux) | **per hour while the plan exists**, even with zero traffic or stopped apps | The main cost (≈ €12/month). Delete it (`cleanup.sh`) after the final evaluation |
 | ACR Basic | fixed daily rate + storage | Small but continuous |
 | Storage account (state) | per GB + transactions | Negligible (a few KB) |
-| Entra app, identity, role assignments | free | – |
+| Managed identities, role assignments | free | – |
 
 Prices in this table are approximate retail prices (germanywestcentral, October 2026); check the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) for your region. The setup costs about €16 per month; the Azure for Students credit covers it until the final evaluation.
 
@@ -341,8 +328,7 @@ Modules, app settings, identity outputs, the RBAC allow-list and the backend dat
 | Error | Cause | Fix |
 |---|---|---|
 | `AADSTS700213` / `No matching federated identity record` | Workflow not running on `main`, or repo renamed | Run on `main`; re-run `bootstrap.sh` |
-| `AuthorizationFailed ... roleAssignments/write` | Role assignment not allowed | Owner must run bootstrap, or instructor-assisted setup |
-| `Insufficient privileges to complete the operation` (az ad app create) | Tenant blocks app registrations | Instructor-assisted setup |
+| `AuthorizationFailed ... roleAssignments/write` | Role assignment not allowed | Owner must run bootstrap; ask the instructor for the role (§8) |
 | `RequestDisallowedByPolicy` | Azure for Students region policy | Re-run bootstrap with an allowed region (`AZURE_LOCATION=...`) |
 | `Operation cannot be completed without additional quota` / `Current Limit (B1 VMs): 0` | No App Service quota in that region | Re-run `bootstrap.sh` (requests quota) or `az quota update --resource-name B1 --scope /subscriptions/<id>/providers/Microsoft.Web/locations/<region> --limit-object value=1` |
 | `terraform init`: `403 AuthorizationPermissionMismatch` | Blob role not propagated yet | Wait 2–5 minutes and retry |

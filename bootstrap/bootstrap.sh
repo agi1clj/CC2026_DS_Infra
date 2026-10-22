@@ -4,9 +4,9 @@
 #
 # Creates (or reuses, when run again):
 #   1. Terraform remote state: resource group, storage account, "tfstate" container
-#   2. A Microsoft Entra application + service principal for GitHub Actions
+#   2. A user-assigned managed identity for GitHub Actions (in the state resource group)
 #   3. GitHub OIDC federated credentials for the Apps and Infra repositories (main branch)
-#   4. Azure role assignments for that service principal and for you
+#   4. Azure role assignments for that identity and for you
 #   5. GitHub repository variables in both repositories
 #   6. terraform/environments/dev/backend.hcl and terraform.tfvars, then `terraform init`
 #
@@ -20,9 +20,8 @@
 # To change something (e.g. after renaming a repository), edit that file or pass an
 # environment variable, then re-run:  APPS_REPO=New_Name ./bootstrap/bootstrap.sh
 #
-# Instructor-assisted mode: if your tenant does not allow you to create app
-# registrations or role assignments, ask your instructor for an application
-# (client) ID and run:  AZURE_CLIENT_ID=<client-id> ./bootstrap/bootstrap.sh
+# Everything is an Azure resource or role assignment: Owner on your subscription is enough.
+# No Microsoft Entra permissions are needed (university tenants usually block app registrations).
 # =============================================================================
 set -euo pipefail
 
@@ -193,7 +192,7 @@ collect_inputs() {
   STATE_RESOURCE_GROUP="rg-$PROJECT_NAME-$STUDENT_INITIALS-tfstate"
   STATE_STORAGE_ACCOUNT="sttf$PROJECT_NAME$STUDENT_INITIALS$(short_hash 6 "$AZURE_SUBSCRIPTION_ID-$STUDENT_INITIALS")"
   STATE_STORAGE_ACCOUNT="${STATE_STORAGE_ACCOUNT:0:24}"
-  ENTRA_APP_NAME="github-actions-$PROJECT_NAME-$STUDENT_INITIALS"
+  GITHUB_IDENTITY_NAME="github-actions-$PROJECT_NAME-$STUDENT_INITIALS"
 
   ok "State storage: $STATE_RESOURCE_GROUP / $STATE_STORAGE_ACCOUNT / $STATE_CONTAINER"
 }
@@ -306,37 +305,29 @@ request_app_service_quota() {
   fi
 }
 
-check_app_registration() {
-  if [[ -n "${AZURE_CLIENT_ID:-}" ]]; then
-    ok "Using the existing application $AZURE_CLIENT_ID (instructor-assisted mode)"
-    return
-  fi
-  if [[ -n "$(az ad app list --display-name "$ENTRA_APP_NAME" --query "[0].appId" --output tsv 2>/dev/null)" ]]; then
-    ok "Application $ENTRA_APP_NAME already exists"
-    return
-  fi
-  local allowed
-  allowed="$(az rest --method get --url "https://graph.microsoft.com/v1.0/policies/authorizationPolicy" \
-    --query "defaultUserRolePermissions.allowedToCreateApps" --output tsv 2>/dev/null || echo unknown)"
-  case "$allowed" in
-    true) ok "Your tenant allows users to register applications" ;;
-    false) problem "Your tenant does not let users register applications. Use the instructor-assisted setup (README > Azure permission prerequisites) unless you hold the Application Developer role." ;;
-    *) warn "Could not read the tenant's app-registration policy; bootstrap will try and report the result." ;;
-  esac
+# Object ID of the signed-in user, read from the "oid" claim of the Azure Resource Manager
+# token. Avoids Microsoft Graph, which university tenants often block for students.
+signed_in_user_object_id() {
+  local payload
+  payload="$(az account get-access-token --query accessToken --output tsv | cut -d. -f2 | tr '_-' '/+')"
+  while ((${#payload} % 4)); do payload+="="; done
+  { base64 -d <<<"$payload" 2>/dev/null || base64 -D <<<"$payload"; } | sed -n 's/.*"oid":"\([^"]*\)".*/\1/p'
 }
 
 check_role_assignment_rights() {
-  SIGNED_IN_USER_ID="$(az ad signed-in-user show --query id --output tsv 2>/dev/null || true)"
-  [[ -n "$SIGNED_IN_USER_ID" ]] || die "Run this script as a user (az login), not as a service principal."
+  [[ "$(az account show --query user.type --output tsv)" == "user" ]] ||
+    die "Run this script as a user (az login), not as a service principal."
+  SIGNED_IN_USER_ID="$(signed_in_user_object_id)"
+  [[ -n "$SIGNED_IN_USER_ID" ]] || die "Could not read your object ID from the Azure CLI token. Run: az login"
 
   local assignments
-  assignments="$(az role assignment list --assignee "$SIGNED_IN_USER_ID" --include-inherited --include-groups \
+  assignments="$(az role assignment list --assignee-object-id "$SIGNED_IN_USER_ID" --include-inherited --include-groups --fill-principal-name false \
     --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" \
     --query "[?roleDefinitionName=='Owner' || roleDefinitionName=='User Access Administrator' || roleDefinitionName=='Role Based Access Control Administrator'].{role:roleDefinitionName, condition:condition}" \
     --output tsv 2>/dev/null || true)"
 
   if [[ -z "$assignments" ]]; then
-    problem "You are not Owner / User Access Administrator on this subscription: role assignments will fail. Ask your instructor (README > Instructor-assisted setup)."
+    problem "You are not Owner / User Access Administrator on this subscription: role assignments will fail. Ask your instructor to give you Owner on your subscription (README §8)."
     PREFLIGHT_CI_CAN_ASSIGN_ROLES=false
     return
   fi
@@ -373,7 +364,6 @@ run_preflight() {
   check_github_repositories
   check_region
   check_app_service_quota
-  check_app_registration
   check_role_assignment_rights
   check_resource_providers
 }
@@ -462,9 +452,9 @@ create_state_storage() {
 assign_role() {
   local principal_id="$1" principal_type="$2" role="$3" scope="$4" condition="${5:-}"
   local existing_id existing_condition
-  existing_id="$(az role assignment list --assignee "$principal_id" --role "$role" --scope "$scope" --query "[0].id" --output tsv 2>/dev/null || true)"
+  existing_id="$(az role assignment list --assignee-object-id "$principal_id" --fill-principal-name false --role "$role" --scope "$scope" --query "[0].id" --output tsv 2>/dev/null || true)"
   if [[ -n "$existing_id" ]]; then
-    existing_condition="$(az role assignment list --assignee "$principal_id" --role "$role" --scope "$scope" --query "[0].condition" --output tsv 2>/dev/null || true)"
+    existing_condition="$(az role assignment list --assignee-object-id "$principal_id" --fill-principal-name false --role "$role" --scope "$scope" --query "[0].condition" --output tsv 2>/dev/null || true)"
     if [[ "$existing_condition" == "$condition" ]]; then
       ok "$role already assigned on $(basename "$scope")"
       return
@@ -490,34 +480,21 @@ assign_role() {
 
 # ----------------------------------------------------------------------------- identity
 
+# A user-assigned managed identity is an Azure resource: creating it, its federated credentials
+# and its role assignments uses only Azure Resource Manager, never Microsoft Entra permissions.
+# It lives in the state resource group, so `terraform destroy` never touches it.
 create_github_identity() {
-  info "Creating the Entra ID application used by GitHub Actions"
-  if [[ -n "${AZURE_CLIENT_ID:-}" ]]; then
-    az ad sp show --id "$AZURE_CLIENT_ID" --output none 2>/dev/null ||
-      die "AZURE_CLIENT_ID=$AZURE_CLIENT_ID has no service principal in this tenant. Ask your instructor to check it."
-    ok "Using the application provided by your instructor ($AZURE_CLIENT_ID)"
-  else
-    AZURE_CLIENT_ID="$(az ad app list --display-name "$ENTRA_APP_NAME" --query "[0].appId" --output tsv)"
-    if [[ -n "$AZURE_CLIENT_ID" ]]; then
-      ok "Application $ENTRA_APP_NAME already exists ($AZURE_CLIENT_ID)"
-    elif AZURE_CLIENT_ID="$(az ad app create --display-name "$ENTRA_APP_NAME" --query appId --output tsv 2>/dev/null)"; then
-      ok "Application $ENTRA_APP_NAME created ($AZURE_CLIENT_ID)"
-    else
-      die "Your tenant does not allow you to create app registrations.
-       Ask your instructor to create one (see README > 'Instructor-assisted setup'),
-       then run: AZURE_CLIENT_ID=<client-id> ./bootstrap/bootstrap.sh"
-    fi
-
-    if ! az ad sp show --id "$AZURE_CLIENT_ID" --output none 2>/dev/null; then
-      retry 5 10 az ad sp create --id "$AZURE_CLIENT_ID" --output none || die "Could not create the service principal."
-    fi
-    ok "Service principal exists"
-  fi
-
-  SP_OBJECT_ID="$(az ad sp show --id "$AZURE_CLIENT_ID" --query id --output tsv)"
+  info "Creating the managed identity used by GitHub Actions"
+  local ids
+  ids="$(az identity create --resource-group "$STATE_RESOURCE_GROUP" --name "$GITHUB_IDENTITY_NAME" \
+    --tags project="$PROJECT_NAME" owner="$STUDENT_INITIALS" purpose=github-actions \
+    --query "join(' ', [clientId, principalId])" --output tsv)" ||
+    die "Could not create managed identity $GITHUB_IDENTITY_NAME in $STATE_RESOURCE_GROUP."
+  read -r AZURE_CLIENT_ID SP_OBJECT_ID <<<"$ids"
+  ok "Managed identity $GITHUB_IDENTITY_NAME ($AZURE_CLIENT_ID)"
 }
 
-# GitHub Actions jobs on the main branch of <repo> may sign in as the application.
+# GitHub Actions jobs on the main branch of <repo> may sign in as the managed identity.
 # No secret is stored anywhere: Azure trusts the short-lived token GitHub issues.
 #
 # GitHub issues the token "subject" in one of two formats, depending on the repository:
@@ -529,32 +506,27 @@ add_federated_credentials() {
   local owner_id repo_id
   owner_id="$(gh api "users/$GITHUB_OWNER" --jq .id)"
   repo_id="$(gh api "repos/$GITHUB_OWNER/$repo" --jq .id)"
-  add_federated_credential "$name" "$repo" "repo:$GITHUB_OWNER/$repo:ref:refs/heads/main"
-  add_federated_credential "$name-ids" "$repo" "repo:$GITHUB_OWNER@$owner_id/$repo@$repo_id:ref:refs/heads/main"
+  add_federated_credential "$name" "repo:$GITHUB_OWNER/$repo:ref:refs/heads/main"
+  add_federated_credential "$name-ids" "repo:$GITHUB_OWNER@$owner_id/$repo@$repo_id:ref:refs/heads/main"
 }
 
 add_federated_credential() {
-  local name="$1" repo="$2" subject="$3"
+  local name="$1" subject="$2"
+  local identity=(--resource-group "$STATE_RESOURCE_GROUP" --identity-name "$GITHUB_IDENTITY_NAME")
   local current
-  current="$(az ad app federated-credential list --id "$AZURE_CLIENT_ID" --query "[?name=='$name'] | [0].subject" --output tsv 2>/dev/null || true)"
-
+  current="$(az identity federated-credential show "${identity[@]}" --name "$name" --query subject --output tsv 2>/dev/null || true)"
   if [[ "$current" == "$subject" ]]; then
     ok "Federated credential $name ($subject) already exists"
     return
   fi
-  if [[ -n "$current" ]]; then
-    az ad app federated-credential delete --id "$AZURE_CLIENT_ID" --federated-credential-id "$name" --output none
-  fi
 
-  local parameters
-  parameters="$(printf '{"name":"%s","issuer":"%s","subject":"%s","audiences":["%s"],"description":"GitHub Actions, main branch of %s"}' \
-    "$name" "$GITHUB_OIDC_ISSUER" "$subject" "$OIDC_AUDIENCE" "$repo")"
-
-  if az ad app federated-credential create --id "$AZURE_CLIENT_ID" --parameters "$parameters" --output none 2>/dev/null; then
+  # create is a PUT: it also updates a credential whose subject changed (e.g. a renamed repository).
+  if az identity federated-credential create "${identity[@]}" --name "$name" --issuer "$GITHUB_OIDC_ISSUER" \
+    --subject "$subject" --audiences "$OIDC_AUDIENCE" --output none 2>/dev/null; then
     ok "Federated credential $name ($subject)"
   else
     warn "Could not add federated credential $name"
-    MANUAL_STEPS+=("az ad app federated-credential create --id $AZURE_CLIENT_ID --parameters '$parameters'")
+    MANUAL_STEPS+=("az identity federated-credential create --resource-group $STATE_RESOURCE_GROUP --identity-name $GITHUB_IDENTITY_NAME --name $name --issuer $GITHUB_OIDC_ISSUER --subject '$subject' --audiences $OIDC_AUDIENCE")
   fi
 }
 

@@ -97,7 +97,6 @@ It answers, for *your* subscription and tenant:
 | Allowed regions (Azure for Students policy) | You picked a blocked region | Pick one from the list it prints |
 | Linux App Service B1 available in the region | No capacity/offer there | Pick another allowed region |
 | App Service quota (B1 instances) in the region | Limit is 0 (common on new / student subscriptions) | Bootstrap requests 1 instance automatically; if refused: portal → *Quotas* → *App Service*, or another region |
-| Users may register applications | University tenant blocks it | Instructor-assisted setup (Infra README §8) |
 | You are Owner / can assign roles | Bootstrap cannot grant roles | Ask the instructor |
 | Owner is *constrained* (cannot delegate role management) | Not an error | You will create the Web Apps from your laptop in Step 7c |
 | Resource providers registered | – | Bootstrap registers them |
@@ -112,7 +111,7 @@ az quota show --resource-name B1 \
   --scope "/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.Web/locations/<region>" \
   --query properties.limit.value                                      # B1 quota in <region> (needs: az extension add -n quota)
 az role assignment list --assignee "$(az ad signed-in-user show --query id -o tsv)" \
-  --include-inherited --query "[].{role:roleDefinitionName, condition:condition}" -o json
+  --include-inherited --query "[].{role:roleDefinitionName, condition:condition}" -o json   # your roles (if Microsoft Graph is blocked, rely on --check)
 ```
 
 **6b. Run it:**
@@ -125,7 +124,7 @@ Answer the prompts (subscription, GitHub user, the two repository names, your in
 
 What it creates:
 - `rg-cc2026-<initials>-tfstate` with a storage account and a `tfstate` container: where Terraform keeps its state
-- An Entra ID application `github-actions-cc2026-<initials>` with federated credentials (two per repository: GitHub uses either a name-based or an ID-based token subject). GitHub Actions on `main` of your two repositories can sign in to Azure with it, without any password
+- A managed identity `github-actions-cc2026-<initials>` in the tfstate resource group, with federated credentials (two per repository: GitHub uses either a name-based or an ID-based token subject). GitHub Actions on `main` of your two repositories can sign in to Azure with it, without any password
 - If the region's App Service quota is 0: a quota request for 1 B1 instance (usually approved in seconds)
 - Role assignments for that identity (Contributor; AcrPull-only RBAC administration; state access) and state access for you
 - GitHub repository variables in both repositories (*Settings → Secrets and variables → Actions → Variables*)
@@ -135,7 +134,7 @@ At the end bootstrap prints the next steps **for your situation**. Note the line
 
 Your answers are saved in `bootstrap/bootstrap.env` (not committed). **Renamed a repository?** Run `./bootstrap/bootstrap.sh` again: it detects the new name (or edit `APPS_REPO` / `INFRA_REPO` in that file) and moves the OIDC trust and the GitHub variables to it. GitHub Actions login fails until you do, because the trust is bound to the exact repository name.
 
-If it stops with a permissions message, show the output to your instructor (README §8, *Instructor-assisted setup*).
+If it stops with a permissions message, show the output to your instructor (README §8).
 
 ## Step 7 — Deploy the initial infrastructure
 
@@ -243,7 +242,7 @@ In the Infra repository folder:
 |---|---|---|
 | Destroy application infrastructure (step 1 of the script) | Deletes `rg-cc2026-<initials>-dev`; **stops the costs** | After the final evaluation |
 | Remove role assignments | The GitHub identity loses access to your subscription | Optional, step 2 |
-| Delete the Entra application | Federated credentials disappear; workflows can no longer log in | Optional, step 2 |
+| Delete the managed identity | Federated credentials disappear; workflows can no longer log in | Optional, step 2 |
 | Delete the state storage | Removes `rg-cc2026-<initials>-tfstate`; only allowed when the state is empty | Optional, step 3 |
 
 Each step shows what it will delete and asks you to type `yes`.

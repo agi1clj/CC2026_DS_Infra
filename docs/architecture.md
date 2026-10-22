@@ -14,13 +14,10 @@ flowchart TB
         infra[Infra repository<br/>terraform.yml]
     end
 
-    subgraph entra["Microsoft Entra ID"]
-        app[App registration + service principal<br/>federated credentials: Apps main, Infra main]
-    end
-
     subgraph sub["Azure subscription"]
         subgraph staterg["rg-cc2026-&lt;initials&gt;-tfstate"]
             sa[(Storage account<br/>tfstate / dev.tfstate)]
+            app[GitHub Actions managed identity<br/>federated credentials: Apps main, Infra main]
         end
         subgraph apprg["rg-cc2026-&lt;initials&gt;-dev"]
             acr[(Container registry Basic)]
@@ -92,7 +89,7 @@ sequenceDiagram
     participant AZ as Azure
 
     S->>B: az login, gh auth login, ./bootstrap/bootstrap.sh
-    B->>AZ: state storage, Entra app, federated credentials, roles
+    B->>AZ: state storage, managed identity, federated credentials, roles
     B->>S: GitHub variables set (CREATE_WEB_APPS=false)
     S->>TF: Run workflow
     TF->>AZ: apply: resource group + ACR
@@ -108,6 +105,6 @@ sequenceDiagram
 
 | Concern | Owner |
 |---|---|
-| State storage, Entra identity, its role assignments, GitHub variables | `bootstrap.sh` (once) |
+| State storage, GitHub Actions managed identity, its role assignments, GitHub variables | `bootstrap.sh` (once) |
 | Resource group, ACR, plan, identity + AcrPull, Web Apps, app settings, ports, TLS | Terraform |
 | Which image tag runs | Apps workflows (Terraform ignores `docker_image_name` only) |
