@@ -335,7 +335,7 @@ Stopping a Web App or turning off Always On on B1 saves nothing: B1 is billed pe
 
 P2 (data pipeline: bronze/silver/gold in Blob Storage, Data Factory, Teams notification) is implemented. Start with [docs/p2/student-walkthrough.md](docs/p2/student-walkthrough.md). Data Factory is owned by Terraform (live mode, no Git integration): the data flow script is `terraform/modules/data-factory/dataflow/energy_etl.dfs`. Never edit it in the portal.
 
-**Provided vs student work.** Provided: storage, Data Factory, trigger, pipeline, Teams notification, roles, the silver Parquet output, the rejected-rows CSV (`silver/rejected/`, with a reason), a reject-ratio check (`maxRejectRatio`, default 10%: above it the run fails and `gold/latest/` is not updated) and two gold files (`daily_energy_by_device.json`, `latest_readings.json`) as worked examples. Students build one gold file, `energy_by_location.json`, in the data flow script (Lab 2 of the walkthrough). A third time-grouping gold file and an extra data-quality rule are an optional bonus.
+**Provided vs student work.** Provided: storage, Data Factory, trigger, pipeline, Teams notification, roles, the silver Parquet output, the rejected-rows CSV (`silver/rejected/`, with a reason), a reject-ratio check (`maxRejectRatio`, default 10%: above it the run fails and `gold/latest/` is not updated) and all three gold files. Students deploy, run and explain the pipeline. The student work of P2 is in the Apps repository (backend reads `gold/latest/`, frontend charts). Optional bonus: one more gold file and one more cleaning rule.
 
 Modules, app settings, identity outputs, the RBAC allow-list and the backend data source are extension points for P3. See [docs/extending.md](docs/extending.md).
 

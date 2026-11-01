@@ -71,6 +71,23 @@ Latest200 select(mapColumn(
 	),
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true) ~> LatestColumns
+// 8d. LOCATION: same pattern as the daily file, grouped by location.
+//     Start from DailyTotals (before rounding) so the sums stay exact.
+DailyTotals aggregate(groupBy(location),
+	total_kwh = sum(total_kwh),
+		devices = countDistinct(device_id),
+		days = countDistinct(date)) ~> LocationTotals
+LocationTotals derive(avg_kwh_per_day = round(total_kwh / days, 3),
+		total_kwh = round(total_kwh, 3)) ~> RoundLocation
+RoundLocation select(mapColumn(
+		location,
+		total_kwh,
+		devices,
+		avg_kwh_per_day
+	),
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true) ~> LocationColumns
+LocationColumns sort(asc(location, true)) ~> SortLocation
 // 9. SINKS: silver = Parquet (folder cleared on each run); gold = one JSON file. partitionBy('hash', 1) = one output partition = one file.
 SilverColumns sink(allowSchemaDrift: true,
 	validateSchema: false,
@@ -101,6 +118,15 @@ LatestColumns sink(allowSchemaDrift: true,
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true,
 	partitionBy('hash', 1)) ~> GoldLatest
+SortLocation sink(allowSchemaDrift: true,
+	validateSchema: false,
+	partitionFileNames:['energy_by_location.json'],
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> GoldLocation
 // Rejected rows: one CSV file silver/rejected/rejected_rows.csv with the reason (folder cleared on each run).
 AddRejectReason sink(allowSchemaDrift: true,
 	validateSchema: false,

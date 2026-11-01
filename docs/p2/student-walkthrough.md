@@ -2,7 +2,7 @@
 
 P2 adds an ETL pipeline (extract, transform, load) to your P1 infrastructure. You upload a CSV file with energy readings. Azure cleans it and writes the results. Teams can show you if it worked.
 
-**Time:** Lab 1 about 90 minutes. Lab 2 about 90 minutes. The data flow needs about 5 minutes to start on every run (Spark cold start). Plan for it.
+**Time:** Lab 1 about 90 minutes. Lab 2 about 60 minutes. The data flow needs about 5 minutes to start on every run (Spark cold start). Plan for it.
 
 **Prerequisites:** the P1 tools and the P1 shell (WSL2 on Windows: the `curl` block uses bash quotes). `gh` installed and logged in (`gh auth status`). Without `gh`, add the secret in the portal of GitHub: repository *Settings → Secrets and variables → Actions*.
 
@@ -42,10 +42,12 @@ The same reading travels through three layers. Each layer answers one question.
 ## What is provided and what you build
 | Part | Who |
 |---|---|
-| Storage, Data Factory, trigger, pipeline, Teams notification, roles, silver, `silver/rejected/`, gold `daily_energy_by_device.json` and `latest_readings.json` (two worked examples) | **Provided** (Terraform) |
-| Gold file `energy_by_location.json` | **You build it** (Lab 2) |
+| Storage, Data Factory, trigger, pipeline, Teams notification, roles, silver, `silver/rejected/` and all three gold files: `daily_energy_by_device.json`, `latest_readings.json`, `energy_by_location.json` | **Provided** (Terraform) |
+| The Apps challenge: backend reads gold, frontend shows charts | **You build it** (Apps repository) |
 
-**Lab 1** (Steps 1 to 8): deploy, upload the file, watch the run, check the results. **Lab 2** (Steps 9 to 14): Teams, two red-card demos, your gold file. **Next** (Step 15): the Apps challenge. **Do not edit anything in the Data Factory portal.** Terraform overwrites portal edits.
+You do not write transformations in P2. You deploy, run and explain the pipeline. Then you use its output.
+
+**Lab 1** (Steps 1 to 8): deploy, upload the file, watch the run, check the results. **Lab 2** (Steps 9 to 12): Teams, two red-card demos, study the pipeline. **Next** (Step 13): the Apps challenge. **Do not edit anything in the Data Factory portal.** Terraform overwrites portal edits.
 
 # Lab 1 — Deploy and run the pipeline (about 90 minutes)
 
@@ -105,7 +107,7 @@ cd ../../..
 
 ## Step 5 — Give yourself access to the data (do this before the upload)
 
-Shared keys are off. The portal and the CLI use your Entra login, which needs a data role. The role can take **5 minutes or more** to work. Start it now and read Step 6 while you wait. Use the **same terminal** for Steps 5 to 14 (`$STORAGE` is a shell variable).
+Shared keys are off. The portal and the CLI use your Entra login, which needs a data role. The role can take **5 minutes or more** to work. Start it now and read Step 6 while you wait. Use the **same terminal** for Steps 5 to 11 (`$STORAGE` is a shell variable).
 
 ```bash
 cd terraform/environments/dev
@@ -142,9 +144,22 @@ The pipeline checks the data before it updates `gold/latest/`. If more than 10% 
 
 ## Step 8 — Check silver, rejected rows and gold
 
-Portal → storage account → **Storage browser → Blob containers**. Open `silver/energy_readings/`, `silver/rejected/` (`rejected_rows.csv` ends with the column `reject_reason`), `gold/by-timestamp/` (one folder per run, like `20261101T093000Z/`) and `gold/latest/` (a copy of the newest run). The full dataset gives 1825 records in `daily_energy_by_device.json`.
+Portal → storage account → **Storage browser → Blob containers**. Open:
+- `silver/energy_readings/` (Parquet) and `silver/rejected/` (`rejected_rows.csv` ends with the column `reject_reason`).
+- `gold/by-timestamp/`: one folder per run, like `20261101T093000Z/`.
+- `gold/latest/`: a copy of the newest run with three files. `daily_energy_by_device.json` has 1825 records. `latest_readings.json` has the 200 newest readings. `energy_by_location.json` has 5 records.
 
-# Lab 2 — Teams, red cards and your gold file (about 90 minutes)
+Open `energy_by_location.json` (**Edit** or download). The `total_kwh` values must be about these (a difference up to 0.01 is fine):
+
+| location | total_kwh | | location | total_kwh |
+|---|---|---|---|---|
+| Cafeteria | 7821.387 | | Server-Room | 19586.318 |
+| Lab | 10296.995 | | Workshop | 7186.407 |
+| Office-A | 7246.373 | | | |
+
+The Apps repository has the full expected files: `docs/p2/sample-data/gold/latest/`.
+
+# Lab 2 — Teams, red cards and the data flow (about 60 minutes)
 
 ## Step 9 — Create the Teams webhook
 
@@ -189,72 +204,19 @@ In Monitor → **Pipeline runs** the red run has status *Failed*. Open it: the f
 
 A different or small file that passes the check replaces silver and `gold/latest/`. Upload `energy_readings.csv` again to restore the normal state.
 
-## Step 12 — Study the two finished examples
+## Step 12 — Study the pipeline
 
-The whole data flow is one file: `terraform/modules/data-factory/dataflow/energy_etl.dfs` (`//` starts a comment). Read it once. Two provided gold files show two patterns.
+Open `terraform/modules/data-factory/dataflow/energy_etl.dfs` (`//` starts a comment). Read it top to bottom and find:
+1. The **source** `BronzeCsv`: reads `bronze/raw/<file>` and checks the schema.
+2. The clean rules in the split `CleanRows`: one stream for good rows, one for rejected rows.
+3. `AddRejectReason` and the sink `RejectedCsv`: the rejected rows with the reason go to `silver/rejected/`.
+4. `DropDuplicates` and `AddTypedColumns`: one row per `device_id` + `timestamp`, real types. The sink `SilverParquet` writes silver.
+5. The aggregates `DailyTotals` (sum per device and day) and `LocationTotals` (sum per location), and `SortLatest` + `limit(200)` (newest readings).
+6. The three gold sinks (`GoldDaily`, `GoldLocation`, `GoldLatest`): one JSON file each. Then find the Copy and the reject-ratio check in `terraform/modules/data-factory/pipeline/energy_etl.json.tftpl`.
 
-**Aggregate pattern: `daily_energy_by_device.json`.**
+You must be able to explain what bronze, silver and gold contain and why the backend reads only `gold/latest/`.
 
-```text
-// input stream   transformation(settings)                                ~> name of the new stream
-AddTypedColumns aggregate(groupBy(device_id, location, date),   // key: one output row per device, location and day
-    total_kwh       = sum(kwh),                                  // value: sum of all kWh of that day
-    avg_temperature = avg(temperature),                          // value: average
-    avg_humidity    = avg(humidity),
-    readings        = count()) ~> DailyTotals                    // value: number of rows. The new stream is DailyTotals
-DailyTotals derive(total_kwh = round(total_kwh, 3),              // derive overwrites a column with the same name
-        avg_temperature = round(avg_temperature, 2),
-        avg_humidity    = round(avg_humidity, 2)) ~> RoundDaily
-RoundDaily sort(asc(device_id, true), asc(date, true)) ~> SortDaily   // true = nulls last
-SortDaily sink(... partitionFileNames:['daily_energy_by_device.json'],   // one file with this name in the run folder gold/by-timestamp/<run>/
-    partitionBy('hash', 1)) ~> GoldDaily                                 // one partition = one file
-```
-
-`AddTypedColumns` is the clean stream. Its columns: `device_id`, `timestamp` (text), `temperature`, `humidity`, `kwh`, `location`, `event_time` (a real timestamp) and `date` (`YYYY-MM-DD`).
-
-**Sort and limit pattern: `latest_readings.json`.** `sort(desc(timestamp, true), ...)`, then `limit(200)`, then a `select` of the six output columns. Find it in the file.
-
-## Step 13 — Build `energy_by_location.json`
-
-Group the daily totals by location. Expected output: 5 records `{location, total_kwh, devices, avg_kwh_per_day}`. `total_kwh` and `avg_kwh_per_day` have 3 decimals. `avg_kwh_per_day` = total kWh / number of different days. Start from `DailyTotals`: it comes before the rounding, so your sums stay exact.
-
-```text
-DailyTotals aggregate(groupBy(<<TODO: which column is the key?>>),
-    total_kwh = sum(total_kwh),
-    devices   = <<TODO: count the different device_id values; hint: countDistinct(device_id)>>,
-    days      = <<TODO: count the different dates; hint: countDistinct(date)>>) ~> LocationTotals
-LocationTotals derive(avg_kwh_per_day = <<TODO: total_kwh divided by days, rounded to 3 decimals>>,
-    total_kwh = round(total_kwh, 3)) ~> RoundLocation
-RoundLocation select(mapColumn(location, total_kwh, devices, avg_kwh_per_day),
-    skipDuplicateMapInputs: true, skipDuplicateMapOutputs: true) ~> LocationColumns
-LocationColumns sink(allowSchemaDrift: true, validateSchema: false, partitionFileNames:['energy_by_location.json'],
-    umask: 0022, preCommands: [], postCommands: [], skipDuplicateMapInputs: true, skipDuplicateMapOutputs: true,
-    partitionBy('hash', 1)) ~> GoldLocation
-```
-
-**How to work:**
-
-1. Paste the block into `energy_etl.dfs` (before the `// 9. SINKS` comment). Fill the gaps. Copy the sink block unchanged.
-2. Register the output in `terraform/modules/data-factory/main.tf`, in the `locals` block at the top. Add `LocationTotals`, `RoundLocation` and `LocationColumns` to `transformations`. Add `GoldLocation` to `gold_sinks`. Without this, Terraform does not know the new sink.
-3. Optional: test in Studio (**Author → Data flows → `df_energy_etl`**, **Data flow debug** on, **Data preview**, then switch debug off). The **Code `{ }`** view shows the script. The file in the repository is the truth.
-4. Commit (`feat(data-factory): add gold file by location`) and push to `main`. Run the manual **terraform** workflow with **apply** ticked.
-5. Upload `energy_readings.csv` again (Step 6) and wait for the green run.
-
-## Step 14 — Check your result
-
-Portal → storage account → **Storage browser → Blob containers → `gold` → `latest`**. `energy_by_location.json` must exist. Open it (**Edit** or download): 5 records. Compare `total_kwh` with the expected values. Rounding can differ in the last digit: accept a difference up to 0.01.
-
-| location | total_kwh | devices |
-|---|---|---|
-| Cafeteria | 7821.387 | 1 |
-| Lab | 10296.995 | 1 |
-| Office-A | 7246.373 | 1 |
-| Server-Room | 19586.318 | 1 |
-| Workshop | 7186.407 | 1 |
-
-The full expected file is in your Apps repository: `https://github.com/<github-user>/CC2026_<LastName>_<FirstName>_Apps/blob/main/docs/p2/sample-data/gold/energy_by_location.json`. CLI alternative: `az storage blob download --auth-mode login --account-name "$STORAGE" --container-name gold --name latest/energy_by_location.json --file /tmp/energy_by_location.json`
-
-## Step 15 — Next: Apps challenge
+## Step 13 — Next: Apps challenge
 
 The backend reads **only `gold/latest/`** (settings `STORAGE_ACCOUNT_URL`, `GOLD_CONTAINER=gold`). Your instructor gives you the PR number of the Apps repository. In your Apps repository, on `main`, run:
 
@@ -297,4 +259,5 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 
 ## Bonus (optional)
 
-Add a third gold file grouped by time (hour of day, weekday or month). Use `hour(event_time)`, `dayOfWeek(event_time)` or `month(event_time)` in a `derive`, then an `aggregate`.
+- Add your own gold file with a time grouping (hour of day, weekday or month): copy the pattern of `LocationTotals`, use `hour(event_time)`, `dayOfWeek(event_time)` or `month(event_time)`, register the names in `main.tf` (`transformations`, `gold_sinks`) and deploy with the workflow.
+- Add one data-quality rule to the split `CleanRows` and a reason in `AddRejectReason`. Test it with a small CSV that has one bad row.

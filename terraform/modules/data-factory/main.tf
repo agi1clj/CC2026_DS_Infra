@@ -12,8 +12,9 @@ locals {
     "CleanRows", "AddRejectReason", "DropDuplicates", "AddTypedColumns", "SilverColumns", "DailyTotals", "RoundDaily",
     "SortDaily",
     "SortLatest", "Latest200", "LatestColumns",
+    "LocationTotals", "RoundLocation", "LocationColumns", "SortLocation",
   ]
-  gold_sinks = ["GoldDaily", "GoldLatest"]
+  gold_sinks = ["GoldDaily", "GoldLatest", "GoldLocation"]
 
   # Pipeline activities whose failure sends the red Teams card.
   failed_activities = ["Run data flow", "Check reject ratio", "Copy to latest"]
