@@ -15,6 +15,18 @@ resource "azurerm_storage_account" "main" {
   shared_access_key_enabled       = false # Entra ID only, no account keys
   allow_nested_items_to_be_public = false
 
+  # Soft delete protects against deleting data by mistake. Blob versioning is not supported
+  # on accounts with a hierarchical namespace (Microsoft feature support table), so it stays off.
+  blob_properties {
+    delete_retention_policy {
+      days = 7
+    }
+
+    container_delete_retention_policy {
+      days = 7
+    }
+  }
+
   tags = var.tags
 }
 
