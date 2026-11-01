@@ -20,3 +20,6 @@ bootstrap/bootstrap.env
 .DS_Store
 .idea/
 .vscode/
+
+# P2: the full dataset is generated locally (scripts/generate_dataset.py), never committed
+data/energy_readings.csv
