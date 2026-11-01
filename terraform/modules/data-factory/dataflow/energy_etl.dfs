@@ -1,6 +1,7 @@
 // Data flow script for df_energy_etl. Lines that start with // are comments: Terraform removes them
 // before it sends the script to Data Factory. Pattern for every step:  <input stream> <transformation>(...) ~> <new stream name>
 // When you add a transformation or a sink, also add its name to `locals` in ../main.tf.
+// Output contract: silver, rejected rows and three gold files (daily, latest readings, by location). Rounding: kWh 3 decimals, averages 2.
 parameters{
 	sourceFile as string ('energy_readings.csv')
 }
@@ -22,16 +23,16 @@ source(output(
 //    A comparison with null is never true, so missing values are tested with isNull().
 BronzeCsv split(isNull(kwh) || kwh < 0 || isNull(humidity) || humidity < 0 || humidity > 100 || isNull(temperature) || temperature < -40 || temperature > 60,
 	disjoint: false) ~> CleanRows@(rejectedRows, validRows)
-// 2b. DERIVE: write the reason into a new column. iif(test, a, b) is "if test then a else b".
+// 3. DERIVE: write the reason into a new column. iif(test, a, b) is "if test then a else b".
 CleanRows@rejectedRows derive(reject_reason = iif(isNull(kwh), 'kwh empty', iif(kwh < 0, 'kwh negative', iif(isNull(humidity) || humidity < 0 || humidity > 100, 'humidity missing or outside 0..100', 'temperature missing or outside -40..60')))) ~> AddRejectReason
-// 3. AGGREGATE as DISTINCT: one row per (device_id, timestamp). first($$) keeps the first value of every other column.
+// 4. AGGREGATE as DISTINCT: one row per (device_id, timestamp). first($$) keeps the first value of every other column.
 //    Duplicates are removed. They are not written anywhere and not counted.
 CleanRows@validRows aggregate(groupBy(device_id, timestamp),
 	each(match(name != 'device_id' && name != 'timestamp'), $$ = first($$))) ~> DropDuplicates
-// 4. DERIVE: add typed columns. event_time = real timestamp; date = first 10 characters of the text (YYYY-MM-DD).
+// 5. DERIVE: add typed columns. event_time = real timestamp; date = first 10 characters of the text (YYYY-MM-DD).
 DropDuplicates derive(event_time = toTimestamp(replace(replace(timestamp, 'T', ' '), 'Z', ''), 'yyyy-MM-dd HH:mm:ss', 'UTC'),
 		date = substring(timestamp, 1, 10)) ~> AddTypedColumns
-// 5. SELECT: choose and rename columns for silver. timestamp = event_time means "write event_time under the name timestamp".
+// 6. SELECT: choose and rename columns for silver. timestamp = event_time means "write event_time under the name timestamp".
 AddTypedColumns select(mapColumn(
 		device_id,
 		timestamp = event_time,
@@ -42,20 +43,20 @@ AddTypedColumns select(mapColumn(
 	),
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true) ~> SilverColumns
-// 6. AGGREGATE: one row per device and day. groupBy = the key; the other expressions are the values.
+// 7. AGGREGATE: one row per device and day. groupBy = the key; the other expressions are the values.
 AddTypedColumns aggregate(groupBy(device_id, location, date),
 	total_kwh = sum(kwh),
 		avg_temperature = avg(temperature),
 		avg_humidity = avg(humidity),
 		readings = count()) ~> DailyTotals
-// 7. DERIVE: round the numbers (kWh: 3 decimals, averages: 2 decimals). Existing columns are overwritten.
+// 8. DERIVE: round the numbers (kWh: 3 decimals, averages: 2 decimals). Existing columns are overwritten.
 DailyTotals derive(total_kwh = round(total_kwh, 3),
 		avg_temperature = round(avg_temperature, 2),
 		avg_humidity = round(avg_humidity, 2)) ~> RoundDaily
-// 8. SORT: nicer output order. asc(column, true) = ascending, nulls last.
+// 9. SORT: nicer output order. asc(column, true) = ascending, nulls last.
 RoundDaily sort(asc(device_id, true),
 	asc(date, true)) ~> SortDaily
-// 8b. WINDOW + FILTER (provided example 2): newest 200 clean readings. There is no limit step in Data Factory.
+// 10. WINDOW + FILTER: the 200 newest clean readings (200 = size of latest_readings.json). Data Factory has no limit step.
 //     derive: constant column grp = 1, so all rows are in one window.
 //     window: number the rows newest first (rowNumber() = 1, 2, 3 ...). Timestamps are ISO 8601 text, so text order = time order.
 //     filter: keep rows 1 to 200. sort: the output order (newest first, ties by device_id descending).
@@ -67,7 +68,7 @@ AddGroup window(over(grp),
 NumberRows filter(rn <= 200) ~> Latest200
 Latest200 sort(desc(timestamp, true),
 	desc(device_id, true)) ~> SortLatest
-// 8c. SELECT: keep only the six output columns (not event_time, date, grp and rn).
+// 11. SELECT: keep only the six output columns (not event_time, date, grp and rn).
 SortLatest select(mapColumn(
 		device_id,
 		timestamp,
@@ -78,7 +79,7 @@ SortLatest select(mapColumn(
 	),
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true) ~> LatestColumns
-// 8d. LOCATION: same pattern as the daily file, grouped by location.
+// 12. AGGREGATE by location: same pattern as the daily file.
 //     Start from DailyTotals (before rounding) so the sums stay exact.
 DailyTotals aggregate(groupBy(location),
 	total_kwh = sum(total_kwh),
@@ -95,7 +96,8 @@ RoundLocation select(mapColumn(
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true) ~> LocationColumns
 LocationColumns sort(asc(location, true)) ~> SortLocation
-// 9. SINKS: silver = Parquet (folder cleared on each run); gold = one JSON file. partitionBy('hash', 1) = one output partition = one file.
+// 13. SINKS: silver = Parquet (folder cleared on each run). Each gold sink = one JSON file in gold/_staging/ (the pipeline copies it on).
+//     partitionBy('hash', 1) = one output partition = one file.
 SilverColumns sink(allowSchemaDrift: true,
 	validateSchema: false,
 	format: 'parquet',
@@ -106,7 +108,6 @@ SilverColumns sink(allowSchemaDrift: true,
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true,
 	partitionBy('hash', 1)) ~> SilverParquet
-// The gold dataset writes into gold/_staging/. The pipeline then copies the files to gold/by-timestamp/<run>/ and gold/latest/.
 SortDaily sink(allowSchemaDrift: true,
 	validateSchema: false,
 	partitionFileNames:['daily_energy_by_device.json'],

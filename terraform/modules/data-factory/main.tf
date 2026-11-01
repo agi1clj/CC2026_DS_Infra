@@ -6,13 +6,13 @@
 #              -> reject-ratio check -> Copy to gold/by-timestamp/<run>/ and gold/latest/ -> Web activity -> Logic App -> Teams
 
 locals {
-  # Names used in dataflow/energy_etl.dfs. The azurerm resource needs them as blocks.
+  # Names used in dataflow/energy_etl.dfs (same order as in the script). The azurerm resource needs them as blocks.
   # Add the name of every new transformation and every new gold sink here.
   transformations = [
-    "CleanRows", "AddRejectReason", "DropDuplicates", "AddTypedColumns", "SilverColumns", "DailyTotals", "RoundDaily",
-    "SortDaily",
-    "AddGroup", "NumberRows", "Latest200", "SortLatest", "LatestColumns",
-    "LocationTotals", "RoundLocation", "LocationColumns", "SortLocation",
+    "CleanRows", "AddRejectReason", "DropDuplicates", "AddTypedColumns", "SilverColumns", # clean and silver
+    "DailyTotals", "RoundDaily", "SortDaily",                                             # gold: daily
+    "AddGroup", "NumberRows", "Latest200", "SortLatest", "LatestColumns",                 # gold: latest readings
+    "LocationTotals", "RoundLocation", "LocationColumns", "SortLocation",                 # gold: by location
   ]
   gold_sinks = ["GoldDaily", "GoldLatest", "GoldLocation"]
 
@@ -20,7 +20,6 @@ locals {
   failed_activities = ["Run data flow", "Check reject ratio", "Copy to history", "Copy to latest"]
 
   # Row counts from the data flow metrics (rowsWritten per sink). A sink that wrote zero rows has no entry, hence the contains().
-  # The metric `sources` is empty for most sinks, so it is not used.
   flow_metrics  = "activity('Run data flow').output.runStatus.metrics"
   rows_silver   = "if(contains(${local.flow_metrics}, 'SilverParquet'), ${local.flow_metrics}.SilverParquet.rowsWritten, 0)"
   rows_rejected = "if(contains(${local.flow_metrics}, 'RejectedCsv'), ${local.flow_metrics}.RejectedCsv.rowsWritten, 0)"
@@ -151,7 +150,7 @@ resource "azurerm_data_factory_custom_dataset" "gold_history" {
   name            = "ds_gold_history"
   data_factory_id = azurerm_data_factory.main.id
   type            = "Binary"
-  parameters      = { runFolder = "19700101T000000Z" }
+  parameters      = { runFolder = "19700101T000000Z" } # placeholder: the Copy activity always passes the run time
 
   linked_service {
     name = azurerm_data_factory_linked_service_data_lake_storage_gen2.lake.name
@@ -244,7 +243,7 @@ resource "azurerm_data_factory_pipeline" "energy_etl" {
 
   parameters = {
     fileName       = "energy_readings.csv"
-    maxRejectRatio = "0.10" # the run fails when more than 10% of the rejected + silver rows are rejected
+    maxRejectRatio = "0.10" # the run fails when rejected / (rejected + silver) is above this ratio
   }
 
   variables = {
