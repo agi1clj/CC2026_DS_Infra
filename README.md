@@ -4,6 +4,7 @@ Terraform, bootstrap and CI/CD for the *Cloud Computing* project (UTCN, 2026–2
 
 > Students: name your copy `CC2026_LastName_FirstName_Infra`. This reference copy is called `CC2026_DS_Infra`.
 > **Start with [docs/p1/student-walkthrough.md](docs/p1/student-walkthrough.md)**. It takes you from zero to working URLs in order.
+> **Part 2 (data pipeline): start with [docs/p2/student-walkthrough.md](docs/p2/student-walkthrough.md)**. Part 1 must be deployed first.
 
 ## 1. Infrastructure architecture
 
