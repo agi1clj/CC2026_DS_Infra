@@ -53,11 +53,11 @@ You do not write transformations in P2. You deploy, run and explain the pipeline
 
 ## Step 1 — Get the P2 code into your Infra repository
 
-Your instructor opens a pull request (PR) in the course template repository and gives you the PR number. In your Infra repository, on `main`, apply it as a patch:
+The P2 changes are pull request 1 of the course template repository. In your Infra repository, on `main`, apply it as a patch:
 
 ```bash
 cd CC2026_<LastName>_<FirstName>_Infra
-gh pr diff <PR-number> --repo agi1clj/CC2026_DS_Infra | git apply
+gh pr diff 1 --repo agi1clj/CC2026_DS_Infra | git apply
 git add -A && git commit -m "feat(p2): add the data pipeline"
 ```
 
@@ -209,10 +209,10 @@ You must be able to explain what bronze, silver and gold contain and why the bac
 
 ## Step 12 — Next: Apps challenge
 
-The backend reads **only `gold/latest/`** (settings `STORAGE_ACCOUNT_URL`, `GOLD_CONTAINER=gold`). Your instructor gives you the PR number of the Apps repository. In your Apps repository, on `main`, run:
+The backend reads **only `gold/latest/`** (settings `STORAGE_ACCOUNT_URL`, `GOLD_CONTAINER=gold`). The Apps changes are pull request 1 of the Apps template repository. In your Apps repository, on `main`, run:
 
 ```bash
-gh pr diff <PR-number> --repo agi1clj/CC2026_DS_Applications | git apply
+gh pr diff 1 --repo agi1clj/CC2026_DS_Applications | git apply
 git add -A && git commit -m "feat(p2): add the challenge brief and sample data"
 ```
 
