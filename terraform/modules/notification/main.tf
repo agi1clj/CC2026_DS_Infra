@@ -3,6 +3,11 @@
 # A plain HTTP action needs no connector and no OAuth consent. With an empty webhook URL the
 # workflow has no action: it accepts the call and does nothing, so the pipeline never fails because of Teams.
 
+# Known limit: the webhook URL is a secret, but it is stored in the Terraform state and in the
+# workflow definition. A Logic App secure parameter would hide it in the portal, but the azurerm
+# provider may read a secure value back as empty and show a change in every plan (not verified), so it is
+# not used. Accepted for this course (no Key Vault). Treat the state storage account as secret.
+
 locals {
   # `nonsensitive` only reveals whether the URL is set (needed for count), not the URL itself.
   teams_enabled = nonsensitive(var.teams_webhook_url != "")
