@@ -90,7 +90,7 @@ cd ../../..
 
 ## Step 5 — Give yourself access to the data
 
-Shared keys are off. Your login needs a data role (it takes 2–5 minutes to work). Use the **same terminal** for Steps 5 to 14 (`$STORAGE` is a shell variable).
+Shared keys are off. The portal and the CLI use your Entra login, which needs a data role. The role can take up to 5 minutes to work. Use the **same terminal** for Steps 5 to 14 (`$STORAGE` is a shell variable).
 
 ```bash
 cd terraform/environments/dev
@@ -103,29 +103,33 @@ az role assignment create \
   --scope "$(az storage account show --name "$STORAGE" --query id -o tsv)"
 ```
 
-## Step 6 — Upload the full file and start the pipeline
+## Step 6 — Upload the full file (portal)
 
-```bash
-az storage blob upload --auth-mode login --account-name "$STORAGE" \
-  --container-name bronze --name raw/energy_readings.csv \
-  --file data/energy_readings.csv --overwrite
-```
+1. Portal → your storage account → **Data storage → Containers → `bronze` → Upload**.
+2. Pick `data/energy_readings.csv`. Open **Advanced**. Set **Upload to folder** to `raw` (the portal creates the folder).
+3. Click **Upload**.
 
-## Step 7 — Watch the run in Data Factory
+Keys are disabled. The portal must use **Authentication method: Microsoft Entra user account**. Use the switch link at the top of the container. The error "not authorized to perform this operation using this permission" means the role of Step 5 is not active yet. Wait and retry.
 
-Portal → Data Factory (`terraform output data_factory_name`) → **Launch studio → Monitor → Pipeline runs**. Expect *In progress*, then *Succeeded*. The first run needs about 5 minutes (Spark cold start). Do not start a second run. The pipeline checks the data before it updates `gold/latest/`. If more than 10% of the rows read are rejected (parameter `maxRejectRatio`, default `0.10`), the run fails. Silver, `silver/rejected/` and `gold/by-timestamp/` are already written then. Only `gold/latest/` stays unchanged.
+CLI alternative: `az storage blob upload --auth-mode login --account-name "$STORAGE" --container-name bronze --name raw/energy_readings.csv --file data/energy_readings.csv --overwrite`
+
+## Step 7 — Watch the run (observe only)
+
+Data Factory page (`terraform output data_factory_name`) → **Launch studio → Monitor**.
+
+1. **Trigger runs**: the storage event trigger fired for your upload.
+2. **Pipeline runs**: status *In progress*, then *Succeeded*. The first run needs about 5 minutes (Spark cold start). Do not upload again meanwhile.
+3. Click the run → **Activity runs**. Click the glasses icon of **Run data flow**: rows read, rows written per sink and duration. Expect 532,895 rows read and 525,600 in silver. The **Notify** activities show the card call.
+
+The pipeline checks the data before it updates `gold/latest/`. If more than 10% of the rows read are rejected (parameter `maxRejectRatio`, default `0.10`), the run fails. Silver, `silver/rejected/` and `gold/by-timestamp/` are already written then. Only `gold/latest/` stays unchanged.
+
+**Never edit anything in Studio.** Terraform overwrites it. Keep **Data flow debug OFF**.
 
 ## Step 8 — Check silver, rejected rows and gold
 
-```bash
-for c in silver/energy_readings/ silver/rejected/ gold/by-timestamp/ gold/latest/; do
-  az storage blob list --auth-mode login --account-name "$STORAGE" --container-name "${c%%/*}" --prefix "${c#*/}" --output table
-done
-az storage blob download --auth-mode login --account-name "$STORAGE" --container-name gold \
-  --name latest/daily_energy_by_device.json --file /tmp/daily_energy_by_device.json && head -c 400 /tmp/daily_energy_by_device.json
-```
+Portal → storage account → **Storage browser → Blob containers**. Open `silver/energy_readings/`, `silver/rejected/` (`rejected_rows.csv` ends with the column `reject_reason`), `gold/by-timestamp/` (one folder per run, like `20261101T093000Z/`) and `gold/latest/` (a copy of the newest run). The full dataset gives 1825 records in `daily_energy_by_device.json`.
 
-`silver/rejected/rejected_rows.csv` ends with the column `reject_reason`. `by-timestamp/` has one folder per run, like `20261101T093000Z/`. `latest/` copies the newest run. The full dataset gives 1825 records in `daily_energy_by_device.json`.
+CLI alternative: `az storage blob list --auth-mode login --account-name "$STORAGE" --container-name gold --prefix latest/ --output table`
 
 ## Step 9 — Create the Teams webhook
 
@@ -161,20 +165,14 @@ The URL is a **secret**. Store it like this:
 
 ## Step 11 — Make runs fail on purpose
 
-Wait for the Teams card before each upload (one run costs about €0.3).
-```bash
-az storage blob upload --auth-mode login --account-name "$STORAGE" \
-  --container-name bronze --name raw/energy_invalid.csv --file data/energy_invalid.csv --overwrite
-```
+Upload each file like in Step 6 (container `bronze`, folder `raw`). Wait for the Teams card before each upload (one run costs about €0.3).
 
-`energy_invalid.csv` has no `kwh` column. The data flow checks the source schema and stops. Monitor shows *Failed*. Teams shows a red **FAILED** card with the error.
+1. `data/energy_invalid.csv` has no `kwh` column. The data flow checks the source schema and stops. Teams shows a red **FAILED** card with the error.
+2. `data/energy_too_dirty.csv` has half of the `kwh` values empty. The data flow succeeds, but more than 10% of the rows are rejected. The reject-ratio check fails. Teams shows **Too many rejected rows**. `gold/latest/` is unchanged.
 
-```bash
-az storage blob upload --auth-mode login --account-name "$STORAGE" \
-  --container-name bronze --name raw/energy_too_dirty.csv --file data/energy_too_dirty.csv --overwrite
-```
+In Monitor → **Pipeline runs** the red run has status *Failed*. Open it: the failed activity (**Run data flow** for file 1, **Check reject ratio** for file 2) shows the error message. The matching **Notify failed** activity succeeded: it sent the red card.
 
-In `energy_too_dirty.csv` half of the `kwh` values are empty. The data flow succeeds, but more than 10% of the rows are rejected. The reject-ratio check fails and Teams shows **Too many rejected rows**. `gold/latest/` is unchanged. A different or small file that passes the check replaces silver and `gold/latest/`: upload `energy_readings.csv` again to restore the normal state.
+A different or small file that passes the check replaces silver and `gold/latest/`. Upload `energy_readings.csv` again to restore the normal state.
 
 # Lab 2 — Write the two gold files
 
@@ -291,7 +289,7 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 |---|---|
 | `MissingSubscriptionRegistration` or `SubscriptionNotRegistered` for `Microsoft.EventGrid`, `Microsoft.DataFactory` or `Microsoft.Logic` | Re-run `bootstrap.sh`, or run `az provider register --namespace Microsoft.EventGrid --wait` |
 | Upload works, no pipeline run | Upload to `raw/<name>.csv` in container `bronze`. Check *Manage → Triggers*: status *Started*. Wait 1–2 minutes |
-| `403 AuthorizationPermissionMismatch` | Do Step 5. Wait 5 minutes. Use `--auth-mode login`, never `--account-key` |
+| `403 AuthorizationPermissionMismatch`, or "not authorized to perform this operation using this permission" in the portal | Do Step 5. Wait 5 minutes. Portal: use the Entra user account method. CLI: `--auth-mode login`, never `--account-key` |
 | No Teams card (curl shows 202, or pipeline succeeded) | Power Automate → My flows → run history. Check `TEAMS_WEBHOOK_URL` and Portal → Logic App → *Runs history* |
 | Run *Failed* with a schema error on a good file | The CSV header differs from the six column names. Compare with `head -1 data/energy_readings.csv` |
 | Red card: `Too many rejected rows` | More than 10% of the rows were rejected. Read `silver/rejected/rejected_rows.csv`. Fix the file or the rules. `gold/latest/` was not changed |
