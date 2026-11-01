@@ -138,7 +138,7 @@ Data Factory page (`terraform output data_factory_name`) → **Launch studio →
 2. **Pipeline runs**: status *In progress*, then *Succeeded*. Wait about 5 minutes for the Spark start. Do not upload again meanwhile.
 3. Click the run → **Activity runs**. Click the glasses icon of **Run data flow**: rows written per sink and duration. Expect 525,600 rows in `SilverParquet` and 5,185 in `RejectedCsv`. The **Notify** activities call the Logic App that sends the Teams card. They work without a webhook.
 
-The pipeline checks the data before it updates `gold/latest/`. If more than 10% of the rows that were rejected or kept are rejected (parameter `maxRejectRatio`, default `0.10`), the run fails. Silver and `silver/rejected/` are already written then. `gold/by-timestamp/` and `gold/latest/` stay unchanged.
+The pipeline checks the data before it updates `gold/latest/`. The run fails if no valid row exists, or if more than 10% of the rows that were rejected or kept are rejected (parameter `maxRejectRatio`, default `0.10`). A failed check leaves `gold/by-timestamp/` and `gold/latest/` unchanged. The run has already overwritten silver and `silver/rejected/` (a known limit of the full refresh: upload a good file again to restore them).
 
 **Never edit anything in Studio.** Terraform overwrites it. Keep **Data flow debug OFF**.
 
@@ -199,8 +199,9 @@ Upload each file like in Step 6 (container `bronze`, folder `raw`). Wait for the
 
 1. `data/energy_invalid.csv` has no `kwh` column. The data flow checks the source schema and stops. Teams shows a red **FAILED (Azure)** card with the error.
 2. `data/energy_too_dirty.csv` has half of the `kwh` values empty. The data flow succeeds, but more than 10% of the rows are rejected. The reject-ratio check fails. Teams shows **Too many rejected rows**. `gold/latest/` is unchanged.
+3. A file with only the header line has no valid rows. Make it with `head -1 data/energy_sample.csv > data/energy_header_only.csv` and upload it. The run fails and Teams shows **No valid rows: nothing to publish**. `gold/latest/` keeps the last good data.
 
-In Monitor → **Pipeline runs** the red run has status *Failed*. Open it: the failed activity (**Run data flow** for file 1, **Check reject ratio** for file 2) shows the error message. The matching **Notify failed** activity succeeded: it sent the red card. Without Teams, look at the Logic App run history.
+In Monitor → **Pipeline runs** the red run has status *Failed*. Open it: the failed activity (**Run data flow** for file 1, **Check reject ratio** for files 2 and 3) shows the error message. The matching **Notify failed** activity succeeded: it sent the red card. Without Teams, look at the Logic App run history.
 
 A different or small file that passes the check replaces silver and `gold/latest/`. Upload `energy_readings.csv` again to restore the normal state.
 
@@ -251,7 +252,7 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 | `403 AuthorizationPermissionMismatch`, or "not authorized to perform this operation using this permission" in the portal | Do Step 5. Wait 5 minutes. Portal: use the Entra user account method. CLI: `--auth-mode login`, never `--account-key` |
 | No Teams card (curl shows 202, or pipeline succeeded) | Power Automate → My flows → run history. Check `TEAMS_WEBHOOK_URL` and Portal → Logic App → *Runs history* |
 | Run *Failed* with a schema error on a good file | The CSV header differs from the six column names. Compare with `head -1 data/energy_readings.csv` |
-| Red card: `Too many rejected rows` | More than 10% of the rows were rejected. Read `silver/rejected/rejected_rows.csv`. Fix the file or the rules. `gold/latest/` was not changed |
+| Red card: `Too many rejected rows` or `No valid rows` | More than 10% of the rows were rejected, or no row was valid. Read `silver/rejected/rejected_rows.csv`. Fix the file or the rules. `gold/by-timestamp/` and `gold/latest/` were not changed. Upload a good file to restore silver |
 | `Copy to history` or `Copy to latest` fails with `403` | Data Factory role not active yet. Wait 5 minutes and upload again |
 | `RequestDisallowedByAzure`, `RequestDisallowedByPolicy` or `LocationNotAvailableForResourceType` | Region policy of Azure for Students. Portal → Policy → Assignments → *Allowed resource deployment regions*. Pick an allowed region, set `AZURE_LOCATION`, re-run bootstrap. We did not check Data Factory and Logic App availability in each region. Not verified |
 | Data flow fails to start with a core quota error (`... cores quota ... exceeded`) | The subscription has no compute quota for the data flow in this region. Request quota (Portal → Help + support → Service and subscription limits) or try another allowed region. Not verified on a student subscription |
