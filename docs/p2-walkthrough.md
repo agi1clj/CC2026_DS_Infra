@@ -5,7 +5,7 @@ P2 adds an ETL pipeline to your P1 infrastructure. You upload a CSV file with en
 ```text
 upload CSV -> bronze/raw/ -> storage event -> Data Factory pipeline -> Mapping Data Flow
                                                   |                       |-> silver/ (clean Parquet)
-                                                  |                       '-> gold/   (JSON files)
+                                                  |                       '-> gold/by-timestamp/<run>/ (history) -> Copy -> gold/latest/
                                                   '-> Logic App -> Teams card (SUCCEEDED / FAILED)
 ```
 
@@ -13,7 +13,7 @@ upload CSV -> bronze/raw/ -> storage event -> Data Factory pipeline -> Mapping D
 |---|---|---|
 | bronze | `bronze` | Raw upload. You never change it |
 | silver | `silver` | Clean, typed Parquet: `energy_readings/` |
-| gold | `gold` | Small JSON files for the backend: `daily_energy_by_device.json`, `energy_by_location.json`, `latest_readings.json` |
+| gold | `gold` | Small JSON files. Every run writes `by-timestamp/<yyyyMMddTHHmmssZ>/<file>.json` (history, never deleted) and then copies the files to `latest/`. The backend reads **only `gold/latest/`** |
 
 Follow the steps in order. Use the same placeholders as in the P1 walkthrough (`<LastName>_<FirstName>`, `<github-user>`, `<initials>`).
 
@@ -142,12 +142,13 @@ The first data flow run starts a Spark cluster. This takes about 5 minutes. Do n
 
 ```bash
 az storage blob list --auth-mode login --account-name "$STORAGE" --container-name silver --prefix energy_readings/ --output table
-az storage blob list --auth-mode login --account-name "$STORAGE" --container-name gold --output table
+az storage blob list --auth-mode login --account-name "$STORAGE" --container-name gold --prefix by-timestamp/ --output table
+az storage blob list --auth-mode login --account-name "$STORAGE" --container-name gold --prefix latest/ --output table
 az storage blob download --auth-mode login --account-name "$STORAGE" --container-name gold \
-  --name energy_by_location.json --file /tmp/energy_by_location.json && cat /tmp/energy_by_location.json
+  --name latest/energy_by_location.json --file /tmp/energy_by_location.json && cat /tmp/energy_by_location.json
 ```
 
-Gold must contain three JSON files (JSON arrays). The full dataset gives 1825 records in `daily_energy_by_device.json` and 5 records in `energy_by_location.json`.
+`by-timestamp/` has one folder per run, for example `by-timestamp/20261101T093000Z/`. `latest/` has a copy of the newest run. Silver has only the data of the newest run. The full dataset gives 1825 records in `daily_energy_by_device.json` and 5 records in `energy_by_location.json`.
 
 ## Step 10 — See the SUCCEEDED card in Teams
 
@@ -165,6 +166,12 @@ az storage blob upload --auth-mode login --account-name "$STORAGE" \
 
 Monitor shows the run as *Failed*. Teams shows **CC2026 P2 pipeline FAILED** with the error message. Silver and gold keep the data of the last good run. Each run reads only the file that started it.
 
+## Safe to repeat
+
+- Uploading the **same file** again, even 3 times, is safe. Silver is overwritten. Each run adds a new folder under `gold/by-timestamp/`. `gold/latest/` shows the newest run. The runs wait in a queue and run one at a time. You get 3 Teams cards.
+- Uploading a **different or small test file** replaces silver and `gold/latest/` with the data of that file. The history stays in `gold/by-timestamp/`. Upload the full `energy_readings.csv` again to restore the normal state.
+- Each upload is one data flow run (about €0.3). Wait for the Teams card before you upload again.
+
 ## Step 12 — Change a cleaning rule
 
 All cleaning rules are in one versioned file: `terraform/modules/data-factory/dataflow/energy_etl.dfs`. Find the transformation `CleanRows`. Change the temperature limit from `60` to `30`. Commit, push to `main` and run the terraform workflow. Upload `energy_readings.csv` again (Step 7) and compare the row counts in Monitor.
@@ -177,14 +184,23 @@ Change the limit back when you are done. Never fix things in the portal.
 
 ## Step 13 — Next: Apps challenge
 
-The backend now has read access to `gold` and the settings `STORAGE_ACCOUNT_URL` and `GOLD_CONTAINER=gold`. Go to the Apps repository and follow `docs/p2-challenge.md`. You read the gold files in the backend and show charts in the frontend.
+The backend has read access to the storage account and the settings `STORAGE_ACCOUNT_URL` and `GOLD_CONTAINER=gold`. It reads **only `gold/latest/`**. Go to the Apps repository and follow `docs/p2-challenge.md`. You read the gold files in the backend and show charts in the frontend.
 
 ## Cost
 
 | Item | Cost |
 |---|---|
-| Data flow run (General Purpose, 8 cores, cold start included) | about €0.3 per run |
+| One data flow run (General Purpose, 8 cores in total, cold start included) | about €0.3 |
+| About 10 test runs | about €3, on top of the P1 cost |
 | Storage, Logic App, Data Factory when idle | cents per month |
+
+- Each upload starts one run. **Wait for the Teams card before the next upload.**
+- **The expensive trap is the Data Factory Studio debug session.** *Data flow debug* keeps a Spark cluster running for the whole session. The default time to live is 60 minutes. Follow these rules:
+  1. Switch *Data flow debug* on only when you test.
+  2. Set the debug **time to live to 15 minutes** in the debug settings.
+  3. Switch *Data flow debug* off when you finish.
+  4. Check **Monitor** and **Cost Management → Cost analysis** (filter on your resource group) after each lab.
+- The pipeline uses the smallest data flow size (General Purpose, 8 cores in total). It uses no time to live and no own integration runtime, so nothing runs between the runs.
 
 Do not upload the big file in a loop. **Delete nothing until the final evaluation** (P3 and the final project use the same infrastructure).
 
@@ -202,3 +218,9 @@ Do not upload the big file in a loop. **Delete nothing until the final evaluatio
 | First run takes 5 minutes | Spark cluster cold start | Normal. Wait |
 | Data flow fails to start: no quota or region error | Student subscription limits | Tell your instructor with the error text |
 | Portal edit disappeared | Terraform overwrote it | Edit the files in this repository instead |
+| `RequestDisallowedByPolicy` when Terraform creates the storage account, the Data Factory or the Logic App | Azure for Students policy allows only some regions or resource types. The new resources use your `location` variable, like P1 | Re-run `bootstrap.sh` with an allowed region (`AZURE_LOCATION=...`). If a resource type is blocked, tell your instructor. Not verified |
+| `SubscriptionNotRegistered` or `MissingSubscriptionRegistration` for `Microsoft.EventGrid` when the trigger is created | Event Grid provider not registered | `az provider register --namespace Microsoft.EventGrid --wait`. Not verified |
+| Data flow run fails: `... cores quota ... exceeded` or `Operation cannot be completed without additional quota` | Student subscriptions can have a low data flow (vCore) quota in a region | Ask your instructor. Try again later or use another allowed region. Not verified |
+| Data Factory or Logic App creation fails with `LocationNotAvailableForResourceType` | The service is not offered in that region for your subscription | Choose another allowed region (re-run bootstrap). Not verified |
+| Storage account creation fails with a name or `StorageAccountAlreadyTaken` error | Name not unique | Change `project_name` or ask your instructor. Not verified |
+| Copy to latest fails with `403` | Data Factory role not active yet | Wait 5 minutes and upload again |
