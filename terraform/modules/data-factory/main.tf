@@ -11,7 +11,7 @@ locals {
   transformations = [
     "CleanRows", "AddRejectReason", "DropDuplicates", "AddTypedColumns", "SilverColumns", "DailyTotals", "RoundDaily",
     "SortDaily",
-    "SortLatest", "Latest200", "LatestColumns",
+    "AddGroup", "NumberRows", "Latest200", "SortLatest", "LatestColumns",
     "LocationTotals", "RoundLocation", "LocationColumns", "SortLocation",
   ]
   gold_sinks = ["GoldDaily", "GoldLatest", "GoldLocation"]

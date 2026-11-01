@@ -56,12 +56,20 @@ DailyTotals derive(total_kwh = round(total_kwh, 3),
 // 8. SORT: nicer output order. asc(column, true) = ascending, nulls last.
 RoundDaily sort(asc(device_id, true),
 	asc(date, true)) ~> SortDaily
-// 8b. SORT + LIMIT (provided example 2): newest 200 clean readings. Timestamps are ISO 8601 text, so text order = time order.
-AddTypedColumns sort(desc(timestamp, true),
+// 8b. WINDOW + FILTER (provided example 2): newest 200 clean readings. There is no limit step in Data Factory.
+//     derive: constant column grp = 1, so all rows are in one window.
+//     window: number the rows newest first (rowNumber() = 1, 2, 3 ...). Timestamps are ISO 8601 text, so text order = time order.
+//     filter: keep rows 1 to 200. sort: the output order (newest first, ties by device_id descending).
+AddTypedColumns derive(grp = 1) ~> AddGroup
+AddGroup window(over(grp),
+	desc(timestamp, true),
+	desc(device_id, true),
+	rn = rowNumber()) ~> NumberRows
+NumberRows filter(rn <= 200) ~> Latest200
+Latest200 sort(desc(timestamp, true),
 	desc(device_id, true)) ~> SortLatest
-SortLatest limit(200) ~> Latest200
-// 8c. SELECT: keep only the six output columns (not event_time and date).
-Latest200 select(mapColumn(
+// 8c. SELECT: keep only the six output columns (not event_time, date, grp and rn).
+SortLatest select(mapColumn(
 		device_id,
 		timestamp,
 		temperature,

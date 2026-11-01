@@ -211,7 +211,7 @@ Open `terraform/modules/data-factory/dataflow/energy_etl.dfs` (`//` starts a com
 2. The clean rules in the split `CleanRows`: one stream for good rows, one for rejected rows.
 3. `AddRejectReason` and the sink `RejectedCsv`: the rejected rows with the reason go to `silver/rejected/`.
 4. `DropDuplicates` and `AddTypedColumns`: one row per `device_id` + `timestamp`, real types. The sink `SilverParquet` writes silver.
-5. The aggregates `DailyTotals` (sum per device and day) and `LocationTotals` (sum per location), and `SortLatest` + `limit(200)` (newest readings).
+5. The aggregates `DailyTotals` (sum per device and day) and `LocationTotals` (sum per location), and `AddGroup` + `NumberRows` (window) + `Latest200` (filter) for the newest readings.
 6. The three gold sinks (`GoldDaily`, `GoldLocation`, `GoldLatest`): one JSON file each. Then find the Copy and the reject-ratio check in `terraform/modules/data-factory/pipeline/energy_etl.json.tftpl`.
 
 You must be able to explain what bronze, silver and gold contain and why the backend reads only `gold/latest/`.
