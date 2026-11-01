@@ -10,3 +10,8 @@ acr_sku         = "Basic"
 
 # create_web_apps defaults to true. Only the very first CI run uses false
 # (GitHub variable CREATE_WEB_APPS); see README > Initial deployment.
+
+# P2: Teams Workflows webhook URL (a secret, so this file stays git-ignored). Empty = no notifications.
+# In GitHub Actions the same value comes from the secret TEAMS_WEBHOOK_URL.
+# bootstrap.sh rewrites terraform.tfvars: add this line again after a re-run.
+teams_webhook_url = ""
