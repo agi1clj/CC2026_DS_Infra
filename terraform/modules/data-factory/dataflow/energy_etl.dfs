@@ -1,0 +1,105 @@
+parameters{
+	sourceFile as string ('energy_readings.csv')
+}
+source(output(
+		device_id as string,
+		timestamp as string,
+		temperature as double,
+		humidity as double,
+		kwh as double,
+		location as string
+	),
+	allowSchemaDrift: false,
+	validateSchema: true,
+	ignoreNoFilesFound: false,
+	wildcardPaths:[(concat('raw/', $sourceFile))]) ~> BronzeCsv
+BronzeCsv filter(!isNull(kwh) && kwh >= 0 && humidity >= 0 && humidity <= 100 && temperature >= -40 && temperature <= 60) ~> CleanRows
+CleanRows aggregate(groupBy(device_id, timestamp),
+	each(match(name != 'device_id' && name != 'timestamp'), $$ = first($$))) ~> DropDuplicates
+DropDuplicates derive(event_time = toTimestamp(replace(replace(timestamp, 'T', ' '), 'Z', ''), 'yyyy-MM-dd HH:mm:ss', 'UTC'),
+		date = substring(timestamp, 1, 10)) ~> AddTypedColumns
+AddTypedColumns select(mapColumn(
+		device_id,
+		timestamp = event_time,
+		temperature,
+		humidity,
+		kwh,
+		location
+	),
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true) ~> SilverColumns
+AddTypedColumns aggregate(groupBy(device_id, location, date),
+	total_kwh = sum(kwh),
+		avg_temperature = avg(temperature),
+		avg_humidity = avg(humidity),
+		readings = count()) ~> DailyTotals
+DailyTotals derive(total_kwh = round(total_kwh, 3),
+		avg_temperature = round(avg_temperature, 2),
+		avg_humidity = round(avg_humidity, 2)) ~> RoundDaily
+RoundDaily sort(asc(device_id, true),
+	asc(date, true)) ~> SortDaily
+DailyTotals aggregate(groupBy(location),
+	total_kwh = sum(total_kwh),
+		devices = countDistinct(device_id),
+		days = countDistinct(date)) ~> LocationTotals
+LocationTotals derive(avg_kwh_per_day = round(total_kwh / days, 3),
+		total_kwh = round(total_kwh, 3)) ~> RoundLocation
+RoundLocation select(mapColumn(
+		location,
+		total_kwh,
+		devices,
+		avg_kwh_per_day
+	),
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true) ~> LocationColumns
+LocationColumns sort(asc(location, true)) ~> SortLocation
+AddTypedColumns sort(desc(timestamp, true),
+	desc(device_id, true)) ~> SortLatest
+SortLatest limit(200) ~> Latest200
+Latest200 select(mapColumn(
+		device_id,
+		timestamp,
+		temperature,
+		humidity,
+		kwh,
+		location
+	),
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true) ~> LatestColumns
+SilverColumns sink(allowSchemaDrift: true,
+	validateSchema: false,
+	format: 'parquet',
+	truncate: true,
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> SilverParquet
+SortDaily sink(allowSchemaDrift: true,
+	validateSchema: false,
+	partitionFileNames:['daily_energy_by_device.json'],
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> GoldDaily
+SortLocation sink(allowSchemaDrift: true,
+	validateSchema: false,
+	partitionFileNames:['energy_by_location.json'],
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> GoldLocation
+LatestColumns sink(allowSchemaDrift: true,
+	validateSchema: false,
+	partitionFileNames:['latest_readings.json'],
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> GoldLatest
