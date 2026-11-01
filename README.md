@@ -42,6 +42,9 @@ More diagrams (conceptual, UML deployment, CI/CD): [docs/architecture.md](docs/a
 | App Service Plan (Linux, B1) | `asp-cc2026-agi-dev` | Terraform | One shared VM for both apps |
 | Linux Web App (container) | `cc2026-api-agi-dev-<4 hex>` | Terraform | Backend, port 8000 |
 | Linux Web App (container) | `cc2026-ui-agi-dev-<4 hex>` | Terraform | Frontend, port 8080 |
+| Storage account (ADLS Gen2) + containers `bronze`, `silver`, `gold` | `stcc2026agidev<4 hex>` | Terraform | P2 data lake. LRS, TLS 1.2, no shared keys, no public access |
+| Data Factory (system-assigned identity, live mode) | `adf-cc2026-agi-dev-<4 hex>` | Terraform | P2 pipeline `pl-energy-etl`, data flow, blob event trigger |
+| Logic App (Consumption) | `logic-cc2026-agi-dev-notify` | Terraform | P2: turns the pipeline status into a Teams card |
 
 The hex suffixes come from a hash of the subscription ID and your initials. They are deterministic: every run, local or CI, produces the same names. They keep globally unique names (ACR, Web Apps, Storage) from colliding between students with the same initials.
 
@@ -51,8 +54,12 @@ The hex suffixes come from a hash of the subscription ID and your initials. They
 terraform/
 ├── modules/
 │   ├── container-registry/   azurerm_container_registry (admin user disabled)
-│   └── app-service/          plan, identity + AcrPull, backend + frontend Web Apps
-│                             (inputs backend_app_settings / frontend_app_settings for later parts)
+│   ├── app-service/          plan, identity + AcrPull, backend + frontend Web Apps
+│   │                         (inputs backend_app_settings / frontend_app_settings for later parts)
+│   ├── storage/              P2: ADLS Gen2 account, containers bronze / silver / gold
+│   ├── data-factory/         P2: factory, linked service (managed identity), datasets,
+│   │                         data flow script (dataflow/), pipeline JSON (pipeline/), blob event trigger
+│   └── notification/         P2: Logic App with HTTP trigger, posts the Teams Adaptive Card
 └── environments/
     └── dev/                  root module: resource group + both modules
         ├── versions.tf       Terraform >= 1.14, azurerm ~> 5.9
@@ -68,7 +75,7 @@ terraform/
 ```
 
 Design rules, from the HashiCorp Terraform style guide and the terraform-skill guidance:
-- One environment (`dev`) and two small modules. No wrappers, workspaces or Terragrunt.
+- One environment (`dev`) and small modules, one per service. No wrappers, workspaces or Terragrunt.
 - Every variable has a type, a description and, where useful, a validation. Every output has a description.
 - Names are computed in one place (`locals.tf`). The bootstrap script reads them from Terraform instead of copying the formula.
 - No provisioners, no secrets, no hard-coded IDs. The only `depends_on` (Web Apps → AcrPull role assignment) is explained in a comment.
@@ -95,6 +102,7 @@ Both come from the same answers you give `bootstrap.sh`, so local and CI runs re
 | `app_service_sku` | `B1` | Plan SKU (B1 or higher, needed for Always On) |
 | `acr_sku` | `Basic` | Registry SKU |
 | `create_web_apps` | `true` | `false` only for the first apply (see §11) |
+| `teams_webhook_url` | `""` | P2: Teams Workflows webhook URL (sensitive). Empty = no Teams cards. GitHub secret `TEAMS_WEBHOOK_URL` |
 
 Locals: `name_base` (`cc2026-agi-dev`), `unique_suffix`, all resource names, and the common `tags` (`project`, `environment`, `owner`, `course`, `managed_by`).
 
@@ -104,6 +112,7 @@ Locals: `name_base` (`cc2026-agi-dev`), `unique_suffix`, all resource names, and
 | `acr_name`, `acr_login_server` | Apps repo variable `ACR_NAME` |
 | `backend_webapp_name`, `frontend_webapp_name` | Apps repo variables `BACKEND_WEBAPP_NAME`, `FRONTEND_WEBAPP_NAME` |
 | `backend_url`, `frontend_url` | You (submission) – `null` until the Web Apps exist |
+| `storage_account_name`, `storage_blob_endpoint`, `data_factory_name`, `upload_command` | P2 (`az storage blob upload`, Data Factory Monitor) |
 
 ## 6. Terraform remote state
 
@@ -161,7 +170,7 @@ Granted to the **GitHub Actions identity**:
 | Role | Scope | Why |
 |---|---|---|
 | Contributor | subscription | Terraform creates the app resource group; workflows push images and update Web Apps |
-| Role Based Access Control Administrator, **conditioned to the roles in `ASSIGNABLE_ROLE_IDS` (today: AcrPull only)** | subscription | Terraform must grant `AcrPull` to the Web Apps' identity. Plain Contributor cannot create role assignments; the condition stops this identity from granting itself or anyone else any other role |
+| Role Based Access Control Administrator, **conditioned to the roles in `ASSIGNABLE_ROLE_IDS` (today: AcrPull, Storage Blob Data Contributor, Storage Blob Data Reader)** | subscription | Terraform must grant `AcrPull` to the Web Apps' identity and the two storage roles to Data Factory and the backend. Plain Contributor cannot create role assignments; the condition stops this identity from granting itself or anyone else any other role |
 | Storage Blob Data Contributor | state storage account | Read/write/lock `dev.tfstate` |
 
 > **Trade-off, stated plainly:** one identity serves both repositories and holds Contributor on the whole subscription. That is acceptable for a personal lab subscription, but it is broader than production practice. A production setup would use one identity per repository and pre-create the resource group, so Contributor could be scoped to it.
@@ -260,6 +269,8 @@ Later CI runs only update resources and pass. The workflow stops with a clear er
 | Pull request / push to `main` (paths `terraform/**`) | `validate`: `fmt -check`, `init -backend=false`, `validate`, `terraform test` | **none** |
 | Manual run on `main` | `validate` → `deploy`: OIDC login, init (remote state), validate, image check, `plan -out`, `apply tfplan`, outputs | yes |
 
+The deploy job passes the secret `TEAMS_WEBHOOK_URL` as `TF_VAR_teams_webhook_url` (P2). Set it with `gh secret set TEAMS_WEBHOOK_URL`.
+
 Infrastructure is never applied automatically on push, and there is no destroy workflow (cleanup is the deliberate local script below).
 
 ## 13. Validation
@@ -271,7 +282,7 @@ terraform fmt -check -recursive terraform
 cd terraform/environments/dev
 terraform init -backend=false
 terraform validate
-terraform test                 # 5 offline tests with a mocked azurerm provider
+terraform test                 # offline tests with a mocked azurerm provider
 cd ../../..
 shellcheck bootstrap/bootstrap.sh scripts/cleanup.sh
 actionlint .github/workflows/terraform.yml
@@ -311,6 +322,7 @@ If step 1 fails, the script stops and never touches the state. GitHub variables 
 | App Service Plan B1 (Linux) | **per hour while the plan exists**, even with zero traffic or stopped apps | The main cost (≈ €12/month). Delete it (`cleanup.sh`) after the final evaluation |
 | ACR Basic | fixed daily rate + storage | Small but continuous |
 | Storage account (state) | per GB + transactions | Negligible (a few KB) |
+| Data lake storage + Data Factory + Logic App (P2) | per GB, per run, per action | Cents per month when idle. A data flow run (General Purpose, 8 cores) costs about €0.3 |
 | Managed identities, role assignments | free | – |
 
 Prices in this table are approximate retail prices (germanywestcentral, October 2026); check the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) for your region. The setup costs about €16 per month; the Azure for Students credit covers it until the final evaluation.
@@ -321,7 +333,9 @@ Stopping a Web App or turning off Always On on B1 saves nothing: B1 is billed pe
 
 ## 16. Extending (P2/P3)
 
-Modules, app settings, identity outputs, the RBAC allow-list and the backend data source are all designed as extension points. See [docs/extending.md](docs/extending.md).
+P2 (data pipeline: bronze/silver/gold in Blob Storage, Data Factory, Teams notification) is implemented. Start with [docs/p2-walkthrough.md](docs/p2-walkthrough.md). Data Factory is owned by Terraform (live mode, no Git integration): the data flow script is `terraform/modules/data-factory/dataflow/energy_etl.dfs`. Never edit it in the portal.
+
+Modules, app settings, identity outputs, the RBAC allow-list and the backend data source are extension points for P3. See [docs/extending.md](docs/extending.md).
 
 ## 17. Common errors
 

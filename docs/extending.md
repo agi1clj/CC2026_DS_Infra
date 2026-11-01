@@ -1,10 +1,10 @@
 # Extending the platform (P2, P3 and beyond)
 
-The platform is built so that later project parts **add** services without restructuring what already works. This page lists the extension points and walks through one example. Nothing here is implemented in P1.
+The platform is built so that later project parts **add** services without restructuring what already works. This page lists the extension points and walks through one example. P2 is now implemented (see below). P3 is not.
 
 | Later part | Likely Azure services (from the course architecture) |
 |---|---|
-| P2 – data pipeline | Blob Storage (raw + processed data), Data Factory, Azure Functions / Logic Apps, Teams notification |
+| P2 – data pipeline (**implemented**) | Data lake (modules `storage`, `data-factory`, `notification`), walkthrough: [p2-walkthrough.md](p2-walkthrough.md) |
 | P3 – identity | Microsoft Entra ID sign-in for the frontend and backend |
 
 ## Extension points
@@ -24,7 +24,9 @@ The platform is built so that later project parts **add** services without restr
 | New deployable app | `.github/workflows/<app>.yml` (Apps repo) | Copy `backend.yml`: test job + deploy job using the same OIDC variables |
 | Tests | `terraform/environments/dev/tests/*.tftest.hcl` | Add a `run` block asserting names/wiring with the mocked provider |
 
-## Worked example: Blob Storage for P2 (sketch)
+## Worked example: Blob Storage for P2 (obsolete sketch)
+
+> **Obsolete.** P2 is implemented. Read `terraform/modules/storage`, `data-factory` and `notification` and the role assignments in `terraform/environments/dev/main.tf` instead. The sketch below stays as a short pattern for a new service.
 
 1. **Module** `terraform/modules/storage/main.tf`:
 
