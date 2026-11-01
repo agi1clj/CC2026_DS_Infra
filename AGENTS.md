@@ -22,7 +22,7 @@ Teaching project (UTCN Cloud Computing). Azure infra for the companion Apps repo
 - New roles Terraform assigns must be added to `ASSIGNABLE_ROLE_IDS` in `bootstrap.sh`; new resource providers to both `bootstrap.sh` and `providers.tf`.
 - Data Factory is Terraform-owned live mode (no Git integration). Change the pipeline, data flow or trigger only in `terraform/modules/data-factory/` (`dataflow/*.dfs`, `pipeline/*.tftpl`). Portal edits are overwritten.
 - P2 roles Terraform assigns: Storage Blob Data Contributor (Data Factory identity) and Storage Blob Data Reader (Web Apps identity, only when `create_web_apps`). Both are in `ASSIGNABLE_ROLE_IDS`. P2 providers: `Microsoft.DataFactory`, `Microsoft.EventGrid`, `Microsoft.Logic`, `Microsoft.Storage`.
-- `teams_webhook_url` is a secret (GitHub secret `TEAMS_WEBHOOK_URL`, local tfvars). Never print it or put it in a committed file.
+- `teams_webhook_url` is a secret (GitHub secret `TEAMS_WEBHOOK_URL`, local `teams.auto.tfvars`; bootstrap rewrites `terraform.tfvars`, so the secret never goes there). Never print it or put it in a committed file.
 - Commits follow Conventional Commits: `type(scope): summary` with type in feat, fix, docs, refactor, test, ci, build, chore (e.g. `fix(bootstrap): reuse existing state resource group`).
 
 ## Agent skills (recommended)

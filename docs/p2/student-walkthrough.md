@@ -70,7 +70,7 @@ az login
 ./bootstrap/bootstrap.sh
 ```
 
-Re-running is safe. It rewrites `terraform/environments/dev/terraform.tfvars`, so do Step 3 **after** it.
+Re-running is safe. Run it again whenever Azure or GitHub asks for it.
 
 ## Step 3 — Create the Teams webhook
 
@@ -94,8 +94,10 @@ The URL is a **secret**. Never commit it. Store it twice:
 
 ```bash
 gh secret set TEAMS_WEBHOOK_URL --repo <github-user>/CC2026_<LastName>_<FirstName>_Infra   # paste the URL
-echo 'teams_webhook_url = "<webhook-url>"' >> terraform/environments/dev/terraform.tfvars   # git-ignored
+echo 'teams_webhook_url = "<webhook-url>"' > terraform/environments/dev/teams.auto.tfvars   # git-ignored
 ```
+
+Use `teams.auto.tfvars`, not `terraform.tfvars`. Bootstrap rewrites `terraform.tfvars` on every run. It never touches `teams.auto.tfvars`.
 
 Your tenant may block Workflows. Ask your instructor or use a personal account. Without a URL the pipeline works but sends no card.
 
