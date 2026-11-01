@@ -1,7 +1,11 @@
+// Data flow script for df_energy_etl. Lines that start with // are comments: Terraform removes them
+// before it sends the script to Data Factory. Pattern for every step:  <input stream> <transformation>(...) ~> <new stream name>
+// When you add a transformation or a sink, also add its name to `locals` in ../main.tf.
 parameters{
 	sourceFile as string ('energy_readings.csv'),
 	runTimestamp as string ('19700101T000000Z')
 }
+// 1. SOURCE: read bronze/raw/<sourceFile>. validateSchema: true = stop with an error if the file does not match the dataset columns.
 source(output(
 		device_id as string,
 		timestamp as string,
@@ -14,11 +18,15 @@ source(output(
 	validateSchema: true,
 	ignoreNoFilesFound: false,
 	wildcardPaths:[(concat('raw/', $sourceFile))]) ~> BronzeCsv
+// 2. FILTER: keep only valid rows. An empty kwh is null, so isNull() removes it; a comparison with null is never true.
 BronzeCsv filter(!isNull(kwh) && kwh >= 0 && humidity >= 0 && humidity <= 100 && temperature >= -40 && temperature <= 60) ~> CleanRows
+// 3. AGGREGATE as DISTINCT: one row per (device_id, timestamp). first($$) keeps the first value of every other column.
 CleanRows aggregate(groupBy(device_id, timestamp),
 	each(match(name != 'device_id' && name != 'timestamp'), $$ = first($$))) ~> DropDuplicates
+// 4. DERIVE: add typed columns. event_time = real timestamp; date = first 10 characters of the text (YYYY-MM-DD).
 DropDuplicates derive(event_time = toTimestamp(replace(replace(timestamp, 'T', ' '), 'Z', ''), 'yyyy-MM-dd HH:mm:ss', 'UTC'),
 		date = substring(timestamp, 1, 10)) ~> AddTypedColumns
+// 5. SELECT: choose and rename columns for silver. timestamp = event_time means "write event_time under the name timestamp".
 AddTypedColumns select(mapColumn(
 		device_id,
 		timestamp = event_time,
@@ -29,44 +37,20 @@ AddTypedColumns select(mapColumn(
 	),
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true) ~> SilverColumns
+// 6. AGGREGATE: one row per device and day. groupBy = the key; the other expressions are the values.
 AddTypedColumns aggregate(groupBy(device_id, location, date),
 	total_kwh = sum(kwh),
 		avg_temperature = avg(temperature),
 		avg_humidity = avg(humidity),
 		readings = count()) ~> DailyTotals
+// 7. DERIVE: round the numbers (kWh: 3 decimals, averages: 2 decimals). Existing columns are overwritten.
 DailyTotals derive(total_kwh = round(total_kwh, 3),
 		avg_temperature = round(avg_temperature, 2),
 		avg_humidity = round(avg_humidity, 2)) ~> RoundDaily
+// 8. SORT: nicer output order. asc(column, true) = ascending, nulls last.
 RoundDaily sort(asc(device_id, true),
 	asc(date, true)) ~> SortDaily
-DailyTotals aggregate(groupBy(location),
-	total_kwh = sum(total_kwh),
-		devices = countDistinct(device_id),
-		days = countDistinct(date)) ~> LocationTotals
-LocationTotals derive(avg_kwh_per_day = round(total_kwh / days, 3),
-		total_kwh = round(total_kwh, 3)) ~> RoundLocation
-RoundLocation select(mapColumn(
-		location,
-		total_kwh,
-		devices,
-		avg_kwh_per_day
-	),
-	skipDuplicateMapInputs: true,
-	skipDuplicateMapOutputs: true) ~> LocationColumns
-LocationColumns sort(asc(location, true)) ~> SortLocation
-AddTypedColumns sort(desc(timestamp, true),
-	desc(device_id, true)) ~> SortLatest
-SortLatest limit(200) ~> Latest200
-Latest200 select(mapColumn(
-		device_id,
-		timestamp,
-		temperature,
-		humidity,
-		kwh,
-		location
-	),
-	skipDuplicateMapInputs: true,
-	skipDuplicateMapOutputs: true) ~> LatestColumns
+// 9. SINKS: silver = Parquet (folder cleared on each run); gold = one JSON file. partitionBy('hash', 1) = one output partition = one file.
 SilverColumns sink(allowSchemaDrift: true,
 	validateSchema: false,
 	format: 'parquet',
@@ -77,6 +61,7 @@ SilverColumns sink(allowSchemaDrift: true,
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true,
 	partitionBy('hash', 1)) ~> SilverParquet
+// The gold dataset writes into gold/by-timestamp/<runTimestamp>/. The pipeline then copies that folder to gold/latest/.
 SortDaily sink(allowSchemaDrift: true,
 	validateSchema: false,
 	partitionFileNames:['daily_energy_by_device.json'],
@@ -86,21 +71,3 @@ SortDaily sink(allowSchemaDrift: true,
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true,
 	partitionBy('hash', 1)) ~> GoldDaily
-SortLocation sink(allowSchemaDrift: true,
-	validateSchema: false,
-	partitionFileNames:['energy_by_location.json'],
-	umask: 0022,
-	preCommands: [],
-	postCommands: [],
-	skipDuplicateMapInputs: true,
-	skipDuplicateMapOutputs: true,
-	partitionBy('hash', 1)) ~> GoldLocation
-LatestColumns sink(allowSchemaDrift: true,
-	validateSchema: false,
-	partitionFileNames:['latest_readings.json'],
-	umask: 0022,
-	preCommands: [],
-	postCommands: [],
-	skipDuplicateMapInputs: true,
-	skipDuplicateMapOutputs: true,
-	partitionBy('hash', 1)) ~> GoldLatest

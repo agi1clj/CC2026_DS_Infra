@@ -5,13 +5,12 @@
 #   pipeline = Mapping Data Flow (bronze CSV -> silver Parquet + gold JSON in gold/by-timestamp/<run>/) -> Copy to gold/latest/ -> Web activity -> Logic App -> Teams
 
 locals {
-  # Transformation names in dataflow/energy_etl.dfs. The azurerm resource needs the list as blocks.
-  # Sources and sinks are listed separately below.
+  # Names used in dataflow/energy_etl.dfs. The azurerm resource needs them as blocks.
+  # Add the name of every new transformation and every new gold sink here.
   transformations = [
-    "CleanRows", "DropDuplicates", "AddTypedColumns", "SilverColumns", "DailyTotals", "RoundDaily",
-    "SortDaily", "LocationTotals", "RoundLocation", "LocationColumns", "SortLocation", "SortLatest",
-    "Latest200", "LatestColumns",
+    "CleanRows", "DropDuplicates", "AddTypedColumns", "SilverColumns", "DailyTotals", "RoundDaily", "SortDaily",
   ]
+  gold_sinks = ["GoldDaily"]
 
   # Link to the run in the ADF monitor, built by the Web activities (the run ID is appended).
   monitor_url_prefix = "https://adf.azure.com/en/monitoring/pipelineruns/"
@@ -141,7 +140,8 @@ resource "azurerm_data_factory_data_flow" "energy" {
   data_factory_id = azurerm_data_factory.main.id
 
   # Hand-written data flow script, versioned in the module. The names below must match it.
-  script = file("${path.module}/dataflow/energy_etl.dfs")
+  # Lines that start with // are comments for students: they are removed before the upload.
+  script = replace(file("${path.module}/dataflow/energy_etl.dfs"), "/(?m)^[ \t]*//[^\n]*\n/", "")
 
   source {
     name = "BronzeCsv"
@@ -168,7 +168,7 @@ resource "azurerm_data_factory_data_flow" "energy" {
   }
 
   dynamic "sink" {
-    for_each = ["GoldDaily", "GoldLocation", "GoldLatest"]
+    for_each = local.gold_sinks
 
     content {
       name = sink.value
