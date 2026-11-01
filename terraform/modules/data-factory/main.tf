@@ -148,6 +148,7 @@ resource "azurerm_data_factory_custom_dataset" "gold_history_json" {
       fileSystem = "gold"
       folderPath = { value = "@concat('by-timestamp/', dataset().runFolder)", type = "Expression" }
     }
+    encodingName = "UTF-8 without BOM" # the default "UTF-8" writes a BOM, which breaks json.loads
   })
 }
 
@@ -167,6 +168,7 @@ resource "azurerm_data_factory_custom_dataset" "gold_latest_json" {
       fileSystem = "gold"
       folderPath = "latest"
     }
+    encodingName = "UTF-8 without BOM" # the default "UTF-8" writes a BOM, which breaks json.loads
   })
 }
 
