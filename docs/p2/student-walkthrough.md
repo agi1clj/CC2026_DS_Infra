@@ -134,6 +134,8 @@ CLI alternative: `az storage blob upload --auth-mode login --account-name "$STOR
 
 Data Factory page (`terraform output data_factory_name`) → **Launch studio → Monitor**.
 
+If Studio offers to open your factory in Fabric, close or dismiss it and stay in Azure Data Factory Studio: this lab does not use Fabric.
+
 1. **Trigger runs**: the storage event trigger fired for your upload.
 2. **Pipeline runs**: status *In progress*, then *Succeeded*. Wait about 5 minutes for the Spark start. Do not upload again meanwhile.
 3. Click the run → **Activity runs**. Click the glasses icon of **Run data flow**: rows written per sink and duration. Expect 525,600 rows in `SilverParquet` and 5,185 in `RejectedCsv`. The **Notify** activities call the Logic App that sends the Teams card. They work without a webhook.
@@ -236,6 +238,7 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 | Symptom | Fix |
 |---|---|
 | `MissingSubscriptionRegistration` or `SubscriptionNotRegistered` for `Microsoft.EventGrid`, `Microsoft.DataFactory` or `Microsoft.Logic` | Re-run `bootstrap.sh`, or run `az provider register --namespace Microsoft.EventGrid --wait` |
+| Studio shows "Setting up your factory in Fabric" | Close or dismiss it. Stay in Azure Data Factory Studio. This lab does not use Fabric |
 | Upload works, no pipeline run | Upload to `raw/<name>.csv` in container `bronze`. Check *Manage → Triggers*: status *Started*. Wait 1–2 minutes |
 | `403 AuthorizationPermissionMismatch`, or "not authorized to perform this operation using this permission" in the portal | Do Step 5. Wait 5 minutes. Portal: use the Entra user account method. CLI: `--auth-mode login`, never `--account-key` |
 | No Teams card (curl shows 202, or pipeline succeeded) | Power Automate → My flows → run history. Check `TEAMS_WEBHOOK_URL` and Portal → Logic App → *Runs history* |
