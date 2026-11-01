@@ -1,5 +1,6 @@
 parameters{
-	sourceFile as string ('energy_readings.csv')
+	sourceFile as string ('energy_readings.csv'),
+	runTimestamp as string ('19700101T000000Z')
 }
 source(output(
 		device_id as string,

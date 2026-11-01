@@ -2,7 +2,7 @@
 # no Git integration). Do not edit resources in the ADF portal: the next apply overwrites them.
 #
 #   blob created in bronze/raw/*.csv -> storage event trigger -> pipeline pl-energy-etl
-#   pipeline = Mapping Data Flow (bronze CSV -> silver Parquet + 3 gold JSON files) -> Web activity -> Logic App -> Teams
+#   pipeline = Mapping Data Flow (bronze CSV -> silver Parquet + gold JSON in gold/by-timestamp/<run>/) -> Copy to gold/latest/ -> Web activity -> Logic App -> Teams
 
 locals {
   # Transformation names in dataflow/energy_etl.dfs. The azurerm resource needs the list as blocks.
@@ -76,11 +76,13 @@ resource "azurerm_data_factory_dataset_parquet" "silver" {
   compression_codec = "snappy"
 }
 
-# The azurerm JSON dataset supports Blob locations only, so the ADLS location uses a custom dataset.
+# The azurerm JSON and binary datasets do not support ADLS locations, so these use custom datasets.
+# Gold history: every run writes gold/by-timestamp/<runFolder>/<file>.json (never deleted).
 resource "azurerm_data_factory_custom_dataset" "gold_json" {
   name            = "ds_gold_json"
   data_factory_id = azurerm_data_factory.main.id
   type            = "Json"
+  parameters      = { runFolder = "19700101T000000Z" }
 
   linked_service {
     name = azurerm_data_factory_linked_service_data_lake_storage_gen2.lake.name
@@ -90,6 +92,46 @@ resource "azurerm_data_factory_custom_dataset" "gold_json" {
     location = {
       type       = "AzureBlobFSLocation"
       fileSystem = "gold"
+      folderPath = { value = "@concat('by-timestamp/', dataset().runFolder)", type = "Expression" }
+    }
+  })
+}
+
+# Copy activity source: the files of one run.
+resource "azurerm_data_factory_custom_dataset" "gold_run_files" {
+  name            = "ds_gold_run_files"
+  data_factory_id = azurerm_data_factory.main.id
+  type            = "Binary"
+  parameters      = { runFolder = "19700101T000000Z" }
+
+  linked_service {
+    name = azurerm_data_factory_linked_service_data_lake_storage_gen2.lake.name
+  }
+
+  type_properties_json = jsonencode({
+    location = {
+      type       = "AzureBlobFSLocation"
+      fileSystem = "gold"
+      folderPath = { value = "@concat('by-timestamp/', dataset().runFolder)", type = "Expression" }
+    }
+  })
+}
+
+# Copy activity sink: gold/latest/ is the only path the backend reads.
+resource "azurerm_data_factory_custom_dataset" "gold_latest" {
+  name            = "ds_gold_latest"
+  data_factory_id = azurerm_data_factory.main.id
+  type            = "Binary"
+
+  linked_service {
+    name = azurerm_data_factory_linked_service_data_lake_storage_gen2.lake.name
+  }
+
+  type_properties_json = jsonencode({
+    location = {
+      type       = "AzureBlobFSLocation"
+      fileSystem = "gold"
+      folderPath = "latest"
     }
   })
 }
@@ -132,7 +174,8 @@ resource "azurerm_data_factory_data_flow" "energy" {
       name = sink.value
 
       dataset {
-        name = azurerm_data_factory_custom_dataset.gold_json.name
+        name       = azurerm_data_factory_custom_dataset.gold_json.name
+        parameters = { runFolder = "$runTimestamp" }
       }
     }
   }
@@ -146,8 +189,17 @@ resource "azurerm_data_factory_pipeline" "energy_etl" {
     fileName = "energy_readings.csv"
   }
 
+  variables = {
+    runTimestamp = ""
+  }
+
+  # One run at a time: extra uploads wait in the queue (each run overwrites silver and gold/latest).
+  concurrency = 1
+
   activities_json = templatefile("${path.module}/pipeline/energy_etl.json.tftpl", {
     data_flow_name     = azurerm_data_factory_data_flow.energy.name
+    gold_run_dataset   = azurerm_data_factory_custom_dataset.gold_run_files.name
+    gold_latest_set    = azurerm_data_factory_custom_dataset.gold_latest.name
     notification_url   = var.notification_url
     monitor_url_prefix = local.monitor_url_prefix
     factory_id_encoded = urlencode(azurerm_data_factory.main.id)
