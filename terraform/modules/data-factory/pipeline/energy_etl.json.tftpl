@@ -60,17 +60,17 @@
     ],
     "typeProperties": {
       "expression": {
-        "value": "@greater(div(float(${rows_rejected}), float(max(1, add(${rows_rejected}, ${rows_silver})))), float(pipeline().parameters.maxRejectRatio))",
+        "value": "@or(equals(${rows_silver}, 0), greater(div(float(${rows_rejected}), float(max(1, add(${rows_rejected}, ${rows_silver})))), float(pipeline().parameters.maxRejectRatio)))",
         "type": "Expression"
       },
       "ifTrueActivities": [
         {
-          "name": "Too many rejected rows",
+          "name": "Stop the run",
           "type": "Fail",
           "dependsOn": [],
           "typeProperties": {
             "message": {
-              "value": "@concat('Too many rejected rows: ', string(${rows_rejected}), ' of ', string(add(${rows_rejected}, ${rows_silver})), ' rows (limit ', pipeline().parameters.maxRejectRatio, '). Silver and gold/by-timestamp are written, gold/latest is NOT updated.')",
+              "value": "@if(equals(${rows_silver}, 0), concat('No valid rows: nothing to publish (silver 0, rejected ', string(${rows_rejected}), '). gold/latest is NOT updated.'), concat('Too many rejected rows: ', string(${rows_rejected}), ' of ', string(add(${rows_rejected}, ${rows_silver})), ' rows (limit ', pipeline().parameters.maxRejectRatio, '). gold/by-timestamp and gold/latest are NOT updated.'))",
               "type": "Expression"
             },
             "errorCode": "RejectRatioTooHigh"
