@@ -11,8 +11,8 @@ upload CSV -> bronze/raw/ -> storage event -> Data Factory pipeline -> Mapping D
                                                   |                       |-> silver/energy_readings/ (clean Parquet)
                                                   |                       |-> silver/rejected/ (bad rows + reason)
                                                   |                       '-> gold/_staging/ (3 JSON files)
-                                                  |-> reject-ratio check -> Copy -> gold/by-timestamp/<run>/ + gold/latest/
-                                                  '-> Logic App -> Teams card (SUCCEEDED / FAILED)
+                                                  |-> checks -> Copy -> gold/by-timestamp/<run>/ + gold/latest/
+                                                  '-> Logic App -> Teams card (SUCCEEDED)
 ```
 
 **Words you need:**
@@ -138,7 +138,7 @@ Data Factory page (`terraform output data_factory_name`) → **Launch studio →
 2. **Pipeline runs**: status *In progress*, then *Succeeded*. Wait about 5 minutes for the Spark start. Do not upload again meanwhile.
 3. Click the run → **Activity runs**. Click the glasses icon of **Run data flow**: rows written per sink and duration. Expect 525,600 rows in `SilverParquet` and 5,185 in `RejectedCsv`. The **Notify** activities call the Logic App that sends the Teams card. They work without a webhook.
 
-The pipeline checks the data before it updates `gold/latest/`. The run fails if no valid row exists, or if more than 10% of the rows that were rejected or kept are rejected (parameter `maxRejectRatio`, default `0.10`). A failed check leaves `gold/by-timestamp/` and `gold/latest/` unchanged. The run has already overwritten silver and `silver/rejected/` (a known limit of the full refresh: upload a good file again to restore them). The data flow also stops when the CSV columns differ from the six expected ones.
+Silver is overwritten by every run. `gold/by-timestamp/` and `gold/latest/` are updated only after the checks of the pipeline pass.
 
 **Never edit anything in Studio.** Terraform overwrites it. Keep **Data flow debug OFF**.
 
@@ -191,7 +191,7 @@ The URL is a **secret**. Store it like this:
    ```
 2. **`terraform/environments/dev/teams.auto.tfvars` (ignored by Git).** Only needed when you run `terraform apply` on your own machine. Content: `teams_webhook_url = "<webhook-url>"`. Do not use `terraform.tfvars`: bootstrap rewrites it.
 3. Never commit the URL. Never paste it in chat or in a README.
-4. Run the manual **terraform** workflow again with **apply** ticked, so the Logic App gets the URL. Then upload the full file again (Step 6). This repeat run shows that uploads are **safe to repeat**: silver is overwritten, a new `gold/by-timestamp/` folder appears and `gold/latest/` shows the newest run. Teams shows **CC2026 P2 pipeline SUCCEEDED (Azure)** with cloud, pipeline, file name, run ID, UTC time (`yyyy-MM-dd HH:mm:ss`), the counts of silver and rejected rows and a run link. A different or small file replaces silver and `gold/latest/`: upload `energy_readings.csv` again to restore the normal state.
+4. Run the manual **terraform** workflow again with **apply** ticked, so the Logic App gets the URL. Then upload the full file again (Step 6). This repeat run shows that uploads are **safe to repeat**: silver is overwritten, a new `gold/by-timestamp/` folder appears and `gold/latest/` shows the newest run. Teams shows **CC2026 P2 pipeline SUCCEEDED (Azure)** with cloud, pipeline, file name, run ID, UTC time (`yyyy-MM-dd HH:mm:ss`), the counts of silver and rejected rows and a run link.
 
 ## Step 11 — Study the pipeline
 
@@ -201,7 +201,7 @@ Open `terraform/modules/data-factory/dataflow/energy_etl.dfs` (`//` starts a com
 3. `AddRejectReason` and the sink `RejectedCsv`: the rejected rows with the reason go to `silver/rejected/`.
 4. `DropDuplicates` and `AddTypedColumns`: one row per `device_id` + `timestamp`, real types. The sink `SilverParquet` writes silver.
 5. The aggregates `DailyTotals` (sum per device and day) and `LocationTotals` (sum per location), and `AddGroup` + `NumberRows` (window) + `Latest200` (filter) for the newest readings.
-6. The three gold sinks (`GoldDaily`, `GoldLocation`, `GoldLatest`): one JSON file each. Then find the two Copy activities and the reject-ratio check in `terraform/modules/data-factory/pipeline/energy_etl.json.tftpl`.
+6. The three gold sinks (`GoldDaily`, `GoldLocation`, `GoldLatest`): one JSON file each. Then find the two Copy activities in `terraform/modules/data-factory/pipeline/energy_etl.json.tftpl`.
 
 You must be able to explain what bronze, silver and gold contain and why the backend reads only `gold/latest/`.
 
@@ -239,8 +239,6 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 | Upload works, no pipeline run | Upload to `raw/<name>.csv` in container `bronze`. Check *Manage → Triggers*: status *Started*. Wait 1–2 minutes |
 | `403 AuthorizationPermissionMismatch`, or "not authorized to perform this operation using this permission" in the portal | Do Step 5. Wait 5 minutes. Portal: use the Entra user account method. CLI: `--auth-mode login`, never `--account-key` |
 | No Teams card (curl shows 202, or pipeline succeeded) | Power Automate → My flows → run history. Check `TEAMS_WEBHOOK_URL` and Portal → Logic App → *Runs history* |
-| Run *Failed* with a schema error on a good file | The CSV header differs from the six column names. Compare with `head -1 data/energy_readings.csv` |
-| Run *Failed* with `Too many rejected rows` or `No valid rows` | More than 10% of the rows were rejected, or no row was valid. Read `silver/rejected/rejected_rows.csv`. Fix the file or the rules. `gold/by-timestamp/` and `gold/latest/` were not changed. Upload a good file to restore silver |
 | `Copy to history` or `Copy to latest` fails with `403` | Data Factory role not active yet. Wait 5 minutes and upload again |
 | `RequestDisallowedByAzure`, `RequestDisallowedByPolicy` or `LocationNotAvailableForResourceType` | Region policy of Azure for Students. Portal → Policy → Assignments → *Allowed resource deployment regions*. Pick an allowed region, set `AZURE_LOCATION`, re-run bootstrap. We did not check Data Factory and Logic App availability in each region. Not verified |
 | Data flow fails to start with a core quota error (`... cores quota ... exceeded`) | The subscription has no compute quota for the data flow in this region. Request quota (Portal → Help + support → Service and subscription limits) or try another allowed region. Not verified on a student subscription |
