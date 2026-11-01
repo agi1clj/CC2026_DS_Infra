@@ -31,7 +31,6 @@ upload CSV -> bronze/raw/ -> storage event -> Data Factory pipeline -> Mapping D
 | gold | `gold` | Small JSON files. Every run writes `by-timestamp/<yyyyMMddTHHmmssZ>/<file>.json` (history, never deleted). Then it copies them to `latest/`. The backend reads **only `gold/latest/`** |
 
 ### Medallion in one minute
-
 The same reading travels through three layers. Each layer answers one question.
 
 | Layer | Question it answers | One reading in this layer |
@@ -41,7 +40,6 @@ The same reading travels through three layers. Each layer answers one question.
 | Gold | What does the dashboard ask? | 288 silver readings of one day become 1 record: `{"device_id":"device-001","location":"Office-A","date":"2025-11-01","total_kwh":18.419,"avg_temperature":21.09,"avg_humidity":55.02,"readings":288}` |
 
 ## What is provided and what you build
-
 | Part | Who |
 |---|---|
 | Storage, Data Factory, trigger, pipeline, Teams notification, roles, silver, `silver/rejected/`, gold `daily_energy_by_device.json` and `latest_readings.json` (two worked examples) | **Provided** (Terraform) |
@@ -145,8 +143,6 @@ The pipeline checks the data before it updates `gold/latest/`. If more than 10% 
 ## Step 8 — Check silver, rejected rows and gold
 
 Portal → storage account → **Storage browser → Blob containers**. Open `silver/energy_readings/`, `silver/rejected/` (`rejected_rows.csv` ends with the column `reject_reason`), `gold/by-timestamp/` (one folder per run, like `20261101T093000Z/`) and `gold/latest/` (a copy of the newest run). The full dataset gives 1825 records in `daily_energy_by_device.json`.
-
-CLI alternative: `az storage blob list --auth-mode login --account-name "$STORAGE" --container-name gold --prefix latest/ --output table`
 
 # Lab 2 — Teams, red cards and your gold file (about 90 minutes)
 
@@ -260,10 +256,16 @@ The full expected file is in your Apps repository: `https://github.com/<github-u
 
 ## Step 15 — Next: Apps challenge
 
-The backend reads **only `gold/latest/`** (settings `STORAGE_ACCOUNT_URL`, `GOLD_CONTAINER=gold`). Follow `docs/p2/challenge.md` in the Apps repository.
+The backend reads **only `gold/latest/`** (settings `STORAGE_ACCOUNT_URL`, `GOLD_CONTAINER=gold`). Your instructor gives you the PR number of the Apps repository. In your Apps repository, on `main`, run:
+
+```bash
+gh pr diff <PR-number> --repo agi1clj/CC2026_DS_Applications | git apply
+git add -A && git commit -m "feat(p2): add the challenge brief and sample data"
+```
+
+Then open `docs/p2/challenge.md` and follow it.
 
 ## Limits
-
 - Every upload is a full refresh. Production appends or merges (for example with Delta or Iceberg).
 - The data flow has no unit tests. The AWS Python script has them.
 - A Spark data flow for a 32 MB file is a teaching choice. A small script would be faster and cheaper.
@@ -283,7 +285,6 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 
 | Symptom | Fix |
 |---|---|
-| `git apply` reports conflicts | Ask your instructor. Do not force |
 | `MissingSubscriptionRegistration` or `SubscriptionNotRegistered` for `Microsoft.EventGrid`, `Microsoft.DataFactory` or `Microsoft.Logic` | Re-run `bootstrap.sh`, or run `az provider register --namespace Microsoft.EventGrid --wait` |
 | Upload works, no pipeline run | Upload to `raw/<name>.csv` in container `bronze`. Check *Manage → Triggers*: status *Started*. Wait 1–2 minutes |
 | `403 AuthorizationPermissionMismatch`, or "not authorized to perform this operation using this permission" in the portal | Do Step 5. Wait 5 minutes. Portal: use the Entra user account method. CLI: `--auth-mode login`, never `--account-key` |
