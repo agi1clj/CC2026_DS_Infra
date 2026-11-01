@@ -96,7 +96,7 @@ RoundLocation select(mapColumn(
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true) ~> LocationColumns
 LocationColumns sort(asc(location, true)) ~> SortLocation
-// 13. SINKS: silver = Parquet (folder cleared on each run). Each gold sink = one JSON file in gold/_staging/ (the pipeline copies it on).
+// 13. SINKS: silver = Parquet (folder cleared on each run). Each gold sink = one JSON-lines file in gold/_staging/ (the pipeline turns it into a JSON array while it copies it).
 //     partitionBy('hash', 1) = one output partition = one file.
 SilverColumns sink(allowSchemaDrift: true,
 	validateSchema: false,

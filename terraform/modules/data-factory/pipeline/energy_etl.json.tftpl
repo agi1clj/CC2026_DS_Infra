@@ -81,107 +81,141 @@
   },
   {
     "name": "Copy to history",
-    "type": "Copy",
+    "type": "ForEach",
     "dependsOn": [
       {
         "activity": "Check reject ratio",
         "dependencyConditions": ["Succeeded"]
       }
     ],
-    "policy": {
-      "timeout": "0.00:10:00",
-      "retry": 1,
-      "retryIntervalInSeconds": 30,
-      "secureOutput": false,
-      "secureInput": false
-    },
     "typeProperties": {
-      "source": {
-        "type": "BinarySource",
-        "storeSettings": {
-          "type": "AzureBlobFSReadSettings",
-          "recursive": false,
-          "wildcardFileName": "*.json",
-          "deleteFilesAfterCompletion": false
-        },
-        "formatSettings": { "type": "BinaryReadSettings" }
+      "isSequential": true,
+      "items": {
+        "value": "@${gold_files_array}",
+        "type": "Expression"
       },
-      "sink": {
-        "type": "BinarySink",
-        "storeSettings": {
-          "type": "AzureBlobFSWriteSettings",
-          "copyBehavior": "PreserveHierarchy"
+      "activities": [
+        {
+          "name": "Copy to history: one file",
+          "type": "Copy",
+          "dependsOn": [],
+          "policy": {
+            "timeout": "0.00:10:00",
+            "retry": 1,
+            "retryIntervalInSeconds": 30,
+            "secureOutput": false,
+            "secureInput": false
+          },
+          "typeProperties": {
+            "source": {
+              "type": "JsonSource",
+              "storeSettings": {
+                "type": "AzureBlobFSReadSettings",
+                "recursive": false,
+                "wildcardFileName": {
+                  "value": "@item()",
+                  "type": "Expression"
+                }
+              },
+              "formatSettings": { "type": "JsonReadSettings" }
+            },
+            "sink": {
+              "type": "JsonSink",
+              "storeSettings": { "type": "AzureBlobFSWriteSettings" },
+              "formatSettings": {
+                "type": "JsonWriteSettings",
+                "filePattern": "arrayOfObjects"
+              }
+            },
+            "enableStaging": false
+          },
+          "inputs": [
+            {
+              "referenceName": "${gold_staging_dataset}",
+              "type": "DatasetReference"
+            }
+          ],
+          "outputs": [
+            {
+              "referenceName": "${gold_history_dataset}",
+              "type": "DatasetReference",
+              "parameters": {
+                "runFolder": {
+                  "value": "@variables('runTimestamp')",
+                  "type": "Expression"
+                }
+              }
+            }
+          ]
         }
-      },
-      "enableStaging": false
-    },
-    "inputs": [
-      {
-        "referenceName": "${gold_staging_dataset}",
-        "type": "DatasetReference"
-      }
-    ],
-    "outputs": [
-      {
-        "referenceName": "${gold_history_dataset}",
-        "type": "DatasetReference",
-        "parameters": {
-          "runFolder": {
-            "value": "@variables('runTimestamp')",
-            "type": "Expression"
-          }
-        }
-      }
-    ]
+      ]
+    }
   },
   {
     "name": "Copy to latest",
-    "type": "Copy",
+    "type": "ForEach",
     "dependsOn": [
       {
         "activity": "Copy to history",
         "dependencyConditions": ["Succeeded"]
       }
     ],
-    "policy": {
-      "timeout": "0.00:10:00",
-      "retry": 1,
-      "retryIntervalInSeconds": 30,
-      "secureOutput": false,
-      "secureInput": false
-    },
     "typeProperties": {
-      "source": {
-        "type": "BinarySource",
-        "storeSettings": {
-          "type": "AzureBlobFSReadSettings",
-          "recursive": false,
-          "wildcardFileName": "*.json",
-          "deleteFilesAfterCompletion": false
-        },
-        "formatSettings": { "type": "BinaryReadSettings" }
+      "isSequential": true,
+      "items": {
+        "value": "@${gold_files_array}",
+        "type": "Expression"
       },
-      "sink": {
-        "type": "BinarySink",
-        "storeSettings": {
-          "type": "AzureBlobFSWriteSettings",
-          "copyBehavior": "PreserveHierarchy"
+      "activities": [
+        {
+          "name": "Copy to latest: one file",
+          "type": "Copy",
+          "dependsOn": [],
+          "policy": {
+            "timeout": "0.00:10:00",
+            "retry": 1,
+            "retryIntervalInSeconds": 30,
+            "secureOutput": false,
+            "secureInput": false
+          },
+          "typeProperties": {
+            "source": {
+              "type": "JsonSource",
+              "storeSettings": {
+                "type": "AzureBlobFSReadSettings",
+                "recursive": false,
+                "wildcardFileName": {
+                  "value": "@item()",
+                  "type": "Expression"
+                }
+              },
+              "formatSettings": { "type": "JsonReadSettings" }
+            },
+            "sink": {
+              "type": "JsonSink",
+              "storeSettings": { "type": "AzureBlobFSWriteSettings" },
+              "formatSettings": {
+                "type": "JsonWriteSettings",
+                "filePattern": "arrayOfObjects"
+              }
+            },
+            "enableStaging": false
+          },
+          "inputs": [
+            {
+              "referenceName": "${gold_staging_dataset}",
+              "type": "DatasetReference"
+            }
+          ],
+          "outputs": [
+            {
+              "referenceName": "${gold_latest_dataset}",
+              "type": "DatasetReference"
+            }
+          ]
         }
-      },
-      "enableStaging": false
-    },
-    "inputs": [
-      {
-        "referenceName": "${gold_staging_dataset}",
-        "type": "DatasetReference"
-      }
-    ],
-    "outputs": [
-      {
-        "referenceName": "${gold_latest_dataset}",
-        "type": "DatasetReference"
-      }
-    ]
+      ]
+    }
   },
   {
     "name": "Notify succeeded",

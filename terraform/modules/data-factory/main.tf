@@ -3,7 +3,7 @@
 #
 #   blob created in bronze/raw/*.csv -> storage event trigger -> pipeline pl-energy-etl
 #   pipeline = Mapping Data Flow (bronze CSV -> silver Parquet, rejected rows CSV, gold JSON in gold/_staging/)
-#              -> reject-ratio check -> Copy to gold/by-timestamp/<run>/ and gold/latest/ -> Web activity -> Logic App -> Teams
+#              -> reject-ratio check -> convert to JSON arrays and copy to gold/by-timestamp/<run>/ and gold/latest/ -> Web activity -> Logic App -> Teams
 
 locals {
   # Names used in dataflow/energy_etl.dfs (same order as in the script). The azurerm resource needs them as blocks.
@@ -15,6 +15,10 @@ locals {
     "LocationTotals", "RoundLocation", "LocationColumns", "SortLocation",                 # gold: by location
   ]
   gold_sinks = ["GoldDaily", "GoldLatest", "GoldLocation"]
+
+  # File names written by the gold sinks (partitionFileNames in the script). The pipeline copies exactly these files.
+  gold_files       = ["daily_energy_by_device.json", "latest_readings.json", "energy_by_location.json"]
+  gold_files_array = "createArray(${join(", ", [for f in local.gold_files : "'${f}'"])})"
 
   # Pipeline activities whose failure sends the red Teams card.
   failed_activities = ["Run data flow", "Check reject ratio", "Copy to history", "Copy to latest"]
@@ -105,9 +109,10 @@ resource "azurerm_data_factory_dataset_delimited_text" "silver_rejected" {
   first_row_as_header = true
 }
 
-# The azurerm JSON and binary datasets do not support ADLS locations, so these use custom datasets.
-# The data flow writes the three gold files to gold/_staging/ (overwritten on every run).
-# The pipeline then copies them to gold/by-timestamp/<run>/ (history, never deleted) and to gold/latest/.
+# The azurerm JSON dataset does not support ADLS locations, so these use custom datasets (type Json).
+# The data flow writes the three gold files to gold/_staging/ as JSON lines (one object per line, the only
+# form a data flow sink writes). The pipeline converts each file to ONE JSON array (arrayOfObjects) while it copies it
+# to gold/by-timestamp/<run>/ (history, never deleted) and to gold/latest/ (the only path the backend reads).
 resource "azurerm_data_factory_custom_dataset" "gold_json" {
   name            = "ds_gold_json"
   data_factory_id = azurerm_data_factory.main.id
@@ -126,30 +131,11 @@ resource "azurerm_data_factory_custom_dataset" "gold_json" {
   })
 }
 
-# Copy activity source: the staged gold files.
-resource "azurerm_data_factory_custom_dataset" "gold_staging" {
-  name            = "ds_gold_staging"
-  data_factory_id = azurerm_data_factory.main.id
-  type            = "Binary"
-
-  linked_service {
-    name = azurerm_data_factory_linked_service_data_lake_storage_gen2.lake.name
-  }
-
-  type_properties_json = jsonencode({
-    location = {
-      type       = "AzureBlobFSLocation"
-      fileSystem = "gold"
-      folderPath = "_staging"
-    }
-  })
-}
-
 # Copy activity sink: one folder per run. The pipeline passes runFolder (yyyyMMddTHHmmssZ).
-resource "azurerm_data_factory_custom_dataset" "gold_history" {
-  name            = "ds_gold_history"
+resource "azurerm_data_factory_custom_dataset" "gold_history_json" {
+  name            = "ds_gold_history_json"
   data_factory_id = azurerm_data_factory.main.id
-  type            = "Binary"
+  type            = "Json"
   parameters      = { runFolder = "19700101T000000Z" } # placeholder: the Copy activity always passes the run time
 
   linked_service {
@@ -166,10 +152,10 @@ resource "azurerm_data_factory_custom_dataset" "gold_history" {
 }
 
 # Copy activity sink: gold/latest/ is the only path the backend reads.
-resource "azurerm_data_factory_custom_dataset" "gold_latest" {
-  name            = "ds_gold_latest"
+resource "azurerm_data_factory_custom_dataset" "gold_latest_json" {
+  name            = "ds_gold_latest_json"
   data_factory_id = azurerm_data_factory.main.id
-  type            = "Binary"
+  type            = "Json"
 
   linked_service {
     name = azurerm_data_factory_linked_service_data_lake_storage_gen2.lake.name
@@ -255,9 +241,10 @@ resource "azurerm_data_factory_pipeline" "energy_etl" {
 
   activities_json = templatefile("${path.module}/pipeline/energy_etl.json.tftpl", {
     data_flow_name       = azurerm_data_factory_data_flow.energy.name
-    gold_staging_dataset = azurerm_data_factory_custom_dataset.gold_staging.name
-    gold_history_dataset = azurerm_data_factory_custom_dataset.gold_history.name
-    gold_latest_dataset  = azurerm_data_factory_custom_dataset.gold_latest.name
+    gold_staging_dataset = azurerm_data_factory_custom_dataset.gold_json.name
+    gold_history_dataset = azurerm_data_factory_custom_dataset.gold_history_json.name
+    gold_latest_dataset  = azurerm_data_factory_custom_dataset.gold_latest_json.name
+    gold_files_array     = local.gold_files_array
     failed_activities    = local.failed_activities
     rows_silver          = local.rows_silver
     rows_rejected        = local.rows_rejected
@@ -272,9 +259,9 @@ resource "azurerm_data_factory_pipeline" "energy_etl" {
   # To rename: add the new dataset and switch the pipeline in one apply, remove the old one in the next.
   depends_on = [
     azurerm_data_factory_data_flow.energy,
-    azurerm_data_factory_custom_dataset.gold_staging,
-    azurerm_data_factory_custom_dataset.gold_history,
-    azurerm_data_factory_custom_dataset.gold_latest,
+    azurerm_data_factory_custom_dataset.gold_json,
+    azurerm_data_factory_custom_dataset.gold_history_json,
+    azurerm_data_factory_custom_dataset.gold_latest_json,
   ]
 }
 
