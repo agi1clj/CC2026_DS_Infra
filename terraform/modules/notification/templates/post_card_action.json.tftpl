@@ -20,15 +20,16 @@
                 "weight": "Bolder",
                 "wrap": true,
                 "color": "@{if(equals(triggerBody()?['status'], 'SUCCEEDED'), 'Good', 'Attention')}",
-                "text": "CC2026 P2 pipeline @{triggerBody()?['status']}"
+                "text": "CC2026 P2 pipeline @{triggerBody()?['status']} (Azure)"
               },
               {
                 "type": "FactSet",
                 "facts": [
+                  { "title": "Cloud", "value": "Azure" },
                   { "title": "Pipeline", "value": "@{coalesce(triggerBody()?['pipeline'], '-')}" },
                   { "title": "File", "value": "@{coalesce(triggerBody()?['file'], '-')}" },
                   { "title": "Run ID", "value": "@{coalesce(triggerBody()?['runId'], '-')}" },
-                  { "title": "Time (UTC)", "value": "@{utcNow()}" }
+                  { "title": "Time (UTC)", "value": "@{formatDateTime(utcNow(), 'yyyy-MM-dd HH:mm:ss')}" }
                 ]
               },
               {
