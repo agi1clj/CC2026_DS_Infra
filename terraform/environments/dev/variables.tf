@@ -64,3 +64,11 @@ variable "subscription_id" {
     error_message = "Subscription ID must be a GUID."
   }
 }
+
+variable "teams_webhook_url" {
+  description = "Microsoft Teams Workflows webhook URL for pipeline notifications (a secret: GitHub secret TEAMS_WEBHOOK_URL, git-ignored tfvars). Empty disables notifications."
+  type        = string
+  default     = ""
+  sensitive   = true
+  nullable    = false
+}

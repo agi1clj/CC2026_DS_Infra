@@ -32,3 +32,23 @@ output "resource_group_name" {
   description = "Name of the application resource group."
   value       = azurerm_resource_group.main.name
 }
+
+output "data_factory_name" {
+  description = "Name of the Data Factory (watch runs in its Monitor tab; never edit it in the portal)."
+  value       = module.data_factory.name
+}
+
+output "storage_account_name" {
+  description = "Name of the data lake storage account (bronze, silver, gold containers)."
+  value       = module.storage.name
+}
+
+output "storage_blob_endpoint" {
+  description = "Blob endpoint of the data lake. The backend gets it as STORAGE_ACCOUNT_URL."
+  value       = module.storage.primary_blob_endpoint
+}
+
+output "upload_command" {
+  description = "Command that uploads the dataset to bronze and starts the pipeline (needs the Storage Blob Data Contributor role for you)."
+  value       = "az storage blob upload --auth-mode login --account-name ${module.storage.name} --container-name bronze --name raw/energy_readings.csv --file data/energy_readings.csv --overwrite"
+}

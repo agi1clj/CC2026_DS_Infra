@@ -1,0 +1,280 @@
+[
+  {
+    "name": "Set run timestamp",
+    "type": "SetVariable",
+    "dependsOn": [],
+    "policy": {
+      "secureOutput": false,
+      "secureInput": false
+    },
+    "typeProperties": {
+      "variableName": "runTimestamp",
+      "value": {
+        "value": "@concat(formatDateTime(pipeline().TriggerTime, 'yyyyMMddTHHmmss'), 'Z')",
+        "type": "Expression"
+      }
+    }
+  },
+  {
+    "name": "Run data flow",
+    "type": "ExecuteDataFlow",
+    "dependsOn": [
+      {
+        "activity": "Set run timestamp",
+        "dependencyConditions": ["Succeeded"]
+      }
+    ],
+    "policy": {
+      "timeout": "0.01:00:00",
+      "retry": 0,
+      "retryIntervalInSeconds": 30,
+      "secureOutput": false,
+      "secureInput": false
+    },
+    "typeProperties": {
+      "dataflow": {
+        "referenceName": "${data_flow_name}",
+        "type": "DataFlowReference",
+        "parameters": {
+          "sourceFile": {
+            "value": "'@{pipeline().parameters.fileName}'",
+            "type": "Expression"
+          }
+        }
+      },
+      "compute": {
+        "coreCount": 8,
+        "computeType": "General"
+      },
+      "traceLevel": "Fine"
+    }
+  },
+  {
+    "name": "Check reject ratio",
+    "type": "IfCondition",
+    "dependsOn": [
+      {
+        "activity": "Run data flow",
+        "dependencyConditions": ["Succeeded"]
+      }
+    ],
+    "typeProperties": {
+      "expression": {
+        "value": "@or(equals(${rows_silver}, 0), greater(div(float(${rows_rejected}), float(max(1, add(${rows_rejected}, ${rows_silver})))), float(pipeline().parameters.maxRejectRatio)))",
+        "type": "Expression"
+      },
+      "ifTrueActivities": [
+        {
+          "name": "Stop the run",
+          "type": "Fail",
+          "dependsOn": [],
+          "typeProperties": {
+            "message": {
+              "value": "@if(equals(${rows_silver}, 0), concat('No valid rows: nothing to publish (silver 0, rejected ', string(${rows_rejected}), '). gold/latest is NOT updated.'), concat('Too many rejected rows: ', string(${rows_rejected}), ' of ', string(add(${rows_rejected}, ${rows_silver})), ' rows (limit ', pipeline().parameters.maxRejectRatio, '). gold/by-timestamp and gold/latest are NOT updated.'))",
+              "type": "Expression"
+            },
+            "errorCode": "RejectRatioTooHigh"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "Copy to history",
+    "type": "ForEach",
+    "dependsOn": [
+      {
+        "activity": "Check reject ratio",
+        "dependencyConditions": ["Succeeded"]
+      }
+    ],
+    "typeProperties": {
+      "isSequential": true,
+      "items": {
+        "value": "@${gold_files_array}",
+        "type": "Expression"
+      },
+      "activities": [
+        {
+          "name": "Copy to history: one file",
+          "type": "Copy",
+          "dependsOn": [],
+          "policy": {
+            "timeout": "0.00:10:00",
+            "retry": 1,
+            "retryIntervalInSeconds": 30,
+            "secureOutput": false,
+            "secureInput": false
+          },
+          "typeProperties": {
+            "source": {
+              "type": "JsonSource",
+              "storeSettings": {
+                "type": "AzureBlobFSReadSettings",
+                "recursive": false,
+                "wildcardFileName": {
+                  "value": "@item()",
+                  "type": "Expression"
+                }
+              },
+              "formatSettings": { "type": "JsonReadSettings" }
+            },
+            "sink": {
+              "type": "JsonSink",
+              "storeSettings": { "type": "AzureBlobFSWriteSettings" },
+              "formatSettings": {
+                "type": "JsonWriteSettings",
+                "filePattern": "arrayOfObjects"
+              }
+            },
+            "enableStaging": false
+          },
+          "inputs": [
+            {
+              "referenceName": "${gold_staging_dataset}",
+              "type": "DatasetReference"
+            }
+          ],
+          "outputs": [
+            {
+              "referenceName": "${gold_history_dataset}",
+              "type": "DatasetReference",
+              "parameters": {
+                "runFolder": {
+                  "value": "@variables('runTimestamp')",
+                  "type": "Expression"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "Copy to latest",
+    "type": "ForEach",
+    "dependsOn": [
+      {
+        "activity": "Copy to history",
+        "dependencyConditions": ["Succeeded"]
+      }
+    ],
+    "typeProperties": {
+      "isSequential": true,
+      "items": {
+        "value": "@${gold_files_array}",
+        "type": "Expression"
+      },
+      "activities": [
+        {
+          "name": "Copy to latest: one file",
+          "type": "Copy",
+          "dependsOn": [],
+          "policy": {
+            "timeout": "0.00:10:00",
+            "retry": 1,
+            "retryIntervalInSeconds": 30,
+            "secureOutput": false,
+            "secureInput": false
+          },
+          "typeProperties": {
+            "source": {
+              "type": "JsonSource",
+              "storeSettings": {
+                "type": "AzureBlobFSReadSettings",
+                "recursive": false,
+                "wildcardFileName": {
+                  "value": "@item()",
+                  "type": "Expression"
+                }
+              },
+              "formatSettings": { "type": "JsonReadSettings" }
+            },
+            "sink": {
+              "type": "JsonSink",
+              "storeSettings": { "type": "AzureBlobFSWriteSettings" },
+              "formatSettings": {
+                "type": "JsonWriteSettings",
+                "filePattern": "arrayOfObjects"
+              }
+            },
+            "enableStaging": false
+          },
+          "inputs": [
+            {
+              "referenceName": "${gold_staging_dataset}",
+              "type": "DatasetReference"
+            }
+          ],
+          "outputs": [
+            {
+              "referenceName": "${gold_latest_dataset}",
+              "type": "DatasetReference"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "Notify succeeded",
+    "type": "WebActivity",
+    "dependsOn": [
+      {
+        "activity": "Copy to latest",
+        "dependencyConditions": ["Succeeded"]
+      }
+    ],
+    "policy": {
+      "timeout": "0.00:05:00",
+      "retry": 1,
+      "retryIntervalInSeconds": 30,
+      "secureOutput": false,
+      "secureInput": true
+    },
+    "typeProperties": {
+      "method": "POST",
+      "url": "${notification_url}",
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "status": "SUCCEEDED",
+        "pipeline": "@{pipeline().Pipeline}",
+        "runId": "@{pipeline().RunId}",
+        "file": "@{pipeline().parameters.fileName}",
+        "message": "Silver rows: @{${rows_silver}}. Rejected rows: @{${rows_rejected}}. Gold history: gold/by-timestamp/@{variables('runTimestamp')}/. Gold latest updated: gold/latest/.",
+        "monitorUrl": "${monitor_url_prefix}@{pipeline().RunId}?factory=${factory_id_encoded}"
+      }
+    }
+  }%{ for activity in failed_activities ~},
+  {
+    "name": "Notify failed (${activity})",
+    "type": "WebActivity",
+    "dependsOn": [
+      {
+        "activity": "${activity}",
+        "dependencyConditions": ["Failed"]
+      }
+    ],
+    "policy": {
+      "timeout": "0.00:05:00",
+      "retry": 1,
+      "retryIntervalInSeconds": 30,
+      "secureOutput": false,
+      "secureInput": true
+    },
+    "typeProperties": {
+      "method": "POST",
+      "url": "${notification_url}",
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "status": "FAILED",
+        "pipeline": "@{pipeline().Pipeline}",
+        "runId": "@{pipeline().RunId}",
+        "file": "@{pipeline().parameters.fileName}",
+        "message": "@{activity('${activity}').error.message}",
+        "monitorUrl": "${monitor_url_prefix}@{pipeline().RunId}?factory=${factory_id_encoded}"
+      }
+    }
+  }%{ endfor ~}
+]
