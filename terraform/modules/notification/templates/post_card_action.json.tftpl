@@ -1,0 +1,53 @@
+{
+  "type": "Http",
+  "inputs": {
+    "method": "POST",
+    "uri": "${webhook_url}",
+    "headers": { "Content-Type": "application/json" },
+    "body": {
+      "type": "message",
+      "attachments": [
+        {
+          "contentType": "application/vnd.microsoft.card.adaptive",
+          "content": {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "type": "AdaptiveCard",
+            "version": "1.4",
+            "body": [
+              {
+                "type": "TextBlock",
+                "size": "Large",
+                "weight": "Bolder",
+                "wrap": true,
+                "color": "@{if(equals(triggerBody()?['status'], 'SUCCEEDED'), 'Good', 'Attention')}",
+                "text": "CC2026 P2 pipeline @{triggerBody()?['status']}"
+              },
+              {
+                "type": "FactSet",
+                "facts": [
+                  { "title": "Pipeline", "value": "@{coalesce(triggerBody()?['pipeline'], '-')}" },
+                  { "title": "File", "value": "@{coalesce(triggerBody()?['file'], '-')}" },
+                  { "title": "Run ID", "value": "@{coalesce(triggerBody()?['runId'], '-')}" },
+                  { "title": "Time (UTC)", "value": "@{utcNow()}" }
+                ]
+              },
+              {
+                "type": "TextBlock",
+                "wrap": true,
+                "text": "@{coalesce(triggerBody()?['message'], '-')}"
+              }
+            ],
+            "actions": [
+              {
+                "type": "Action.OpenUrl",
+                "title": "Open run in Data Factory",
+                "url": "@{coalesce(triggerBody()?['monitorUrl'], 'https://adf.azure.com')}"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "runAfter": {}
+}
