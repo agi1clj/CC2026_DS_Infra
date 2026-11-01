@@ -149,19 +149,19 @@ Your tenant may block Workflows: ask your instructor or use a personal account.
 
 ## Step 10 — Add Teams to the pipeline and repeat the run
 
-The URL is a **secret**. Never commit it. Store it twice:
+The URL is a **secret**. Store it like this:
 
-```bash
-gh secret set TEAMS_WEBHOOK_URL --repo <github-user>/CC2026_<LastName>_<FirstName>_Infra   # paste the URL
-echo 'teams_webhook_url = "<webhook-url>"' > terraform/environments/dev/teams.auto.tfvars   # git-ignored
-```
-
-Use `teams.auto.tfvars`, not `terraform.tfvars`: bootstrap rewrites `terraform.tfvars` on every run and never touches `teams.auto.tfvars`. Run the **terraform** workflow again with **apply** ticked. Then upload the full file again (Step 6). This repeat run shows that uploads are **safe to repeat**: silver is overwritten, a new `gold/by-timestamp/` folder appears and `gold/latest/` shows the newest run. Runs queue one at a time. Teams shows **CC2026 P2 pipeline SUCCEEDED** with file name, run ID, a run link and the counts: rows read, silver, rejected and duplicates removed.
+1. **GitHub secret (required).** The terraform workflow reads it. The command prompts for the value, so the URL stays out of your shell history:
+   ```bash
+   gh secret set TEAMS_WEBHOOK_URL --repo <github-user>/CC2026_<LastName>_<FirstName>_Infra
+   ```
+2. **`terraform/environments/dev/teams.auto.tfvars` (ignored by Git).** Only needed when you run `terraform apply` on your own machine. Content: `teams_webhook_url = "<webhook-url>"`. Do not use `terraform.tfvars`: bootstrap rewrites it.
+3. Never commit the URL. Never paste it in chat or in a README.
+4. Run the **terraform** workflow again with **apply** ticked, so the Logic App gets the URL. Then upload the full file again (Step 6). This repeat run shows that uploads are **safe to repeat**: silver is overwritten, a new `gold/by-timestamp/` folder appears and `gold/latest/` shows the newest run. Runs queue one at a time. Teams shows **CC2026 P2 pipeline SUCCEEDED** with file name, run ID, a run link and the counts: rows read, silver, rejected and duplicates removed.
 
 ## Step 11 — Make runs fail on purpose
 
-Each upload is one run (about €0.3). Wait for the Teams card before the next upload.
-
+Wait for the Teams card before each upload (one run costs about €0.3).
 ```bash
 az storage blob upload --auth-mode login --account-name "$STORAGE" \
   --container-name bronze --name raw/energy_invalid.csv --file data/energy_invalid.csv --overwrite
