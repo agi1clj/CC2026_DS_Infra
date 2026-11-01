@@ -24,6 +24,8 @@
 # No Microsoft Entra permissions are needed (university tenants usually block app registrations).
 # =============================================================================
 set -euo pipefail
+# Git Bash on Windows rewrites arguments such as /subscriptions/<id> into C:/Program Files/Git/...; Azure then fails with MissingSubscription.
+export MSYS_NO_PATHCONV=1
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
