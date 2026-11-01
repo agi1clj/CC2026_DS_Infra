@@ -34,7 +34,7 @@ DEVICES = {
     "device-005": ("Workshop", 0.020, 0.140, 0.25),
 }
 
-# Silver rules, mirrored by the Data Factory data flow and the Glue job.
+# Silver rules. The ETL job in each cloud applies the same rules.
 MAX_HUMIDITY = 100.0
 TEMPERATURE_RANGE = (-40.0, 60.0)
 
