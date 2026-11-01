@@ -4,7 +4,7 @@ The platform is built so that later project parts **add** services without restr
 
 | Later part | Likely Azure services (from the course architecture) |
 |---|---|
-| P2 – data pipeline (**implemented**) | Data lake (modules `storage`, `data-factory`, `notification`), walkthrough: [p2-walkthrough.md](p2-walkthrough.md) |
+| P2 – data pipeline (**implemented**) | Data lake (modules `storage`, `data-factory`, `notification`), walkthrough: [p2-walkthrough.md](p2/student-walkthrough.md) |
 | P3 – identity | Microsoft Entra ID sign-in for the frontend and backend |
 
 ## Extension points
