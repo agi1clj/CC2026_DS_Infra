@@ -47,7 +47,7 @@ The same reading travels through three layers. Each layer answers one question.
 
 You do not write transformations in P2. You deploy, run and explain the pipeline. Then you use its output.
 
-**Lab 1** (Steps 1 to 8): deploy, upload the file, watch the run, check the results. **Lab 2** (Steps 9 to 12): Teams, two red-card demos, study the pipeline. **Next** (Step 13): the Apps challenge. **Do not edit anything in the Data Factory portal.** Terraform overwrites portal edits.
+**Lab 1** (Steps 1 to 8): deploy, upload the file, watch the run, check the results. **Lab 2** (Steps 9 to 11): Teams and a study of the data flow. **Next** (Step 12): the Apps challenge. **Do not edit anything in the Data Factory portal.** Terraform overwrites portal edits.
 
 # Lab 1 — Deploy and run the pipeline (about 90 minutes)
 
@@ -75,7 +75,7 @@ az login
 
 ## Step 3 — Get the dataset
 
-`data/` holds small test files: `energy_sample.csv` (1 day), `energy_invalid.csv` and `energy_too_dirty.csv` (both broken on purpose, Step 11). Download `energy_readings.csv` from the course channel (Teams, Files) and save it as `data/energy_readings.csv`. It has 532,895 rows and 32 MB. Git ignores it. Check it: `wc -l` must show 532896 (header included) and `head` the column names.
+`data/energy_sample.csv` is a small sample (1 day). Download `energy_readings.csv` from the course channel (Teams, Files) and save it as `data/energy_readings.csv`. It has 532,895 rows and 32 MB. Git ignores it. Check it: `wc -l` must show 532896 (header included) and `head` the column names.
 
 ```bash
 wc -l data/energy_readings.csv && head -3 data/energy_readings.csv
@@ -107,7 +107,7 @@ cd ../../..
 
 ## Step 5 — Give yourself access to the data (do this before the upload)
 
-Shared keys are off. The portal and the CLI use your Entra login, which needs a data role. The role can take **5 minutes or more** to work. Start it now and read Step 6 while you wait. Use the **same terminal** for Steps 5 to 11 (`$STORAGE` is a shell variable).
+Shared keys are off. The portal and the CLI use your Entra login, which needs a data role. The role can take **5 minutes or more** to work. Start it now and read Step 6 while you wait. Use the **same terminal** for Steps 5 to 10 (`$STORAGE` is a shell variable).
 
 ```bash
 cd terraform/environments/dev
@@ -138,7 +138,7 @@ Data Factory page (`terraform output data_factory_name`) → **Launch studio →
 2. **Pipeline runs**: status *In progress*, then *Succeeded*. Wait about 5 minutes for the Spark start. Do not upload again meanwhile.
 3. Click the run → **Activity runs**. Click the glasses icon of **Run data flow**: rows written per sink and duration. Expect 525,600 rows in `SilverParquet` and 5,185 in `RejectedCsv`. The **Notify** activities call the Logic App that sends the Teams card. They work without a webhook.
 
-The pipeline checks the data before it updates `gold/latest/`. The run fails if no valid row exists, or if more than 10% of the rows that were rejected or kept are rejected (parameter `maxRejectRatio`, default `0.10`). A failed check leaves `gold/by-timestamp/` and `gold/latest/` unchanged. The run has already overwritten silver and `silver/rejected/` (a known limit of the full refresh: upload a good file again to restore them).
+The pipeline checks the data before it updates `gold/latest/`. The run fails if no valid row exists, or if more than 10% of the rows that were rejected or kept are rejected (parameter `maxRejectRatio`, default `0.10`). A failed check leaves `gold/by-timestamp/` and `gold/latest/` unchanged. The run has already overwritten silver and `silver/rejected/` (a known limit of the full refresh: upload a good file again to restore them). The data flow also stops when the CSV columns differ from the six expected ones.
 
 **Never edit anything in Studio.** Terraform overwrites it. Keep **Data flow debug OFF**.
 
@@ -159,7 +159,7 @@ Open `energy_by_location.json` (**Edit** or download). The `total_kwh` values mu
 
 The Apps repository has the full expected files: `docs/p2/sample-data/gold/latest/`.
 
-# Lab 2 — Teams, red cards and the data flow (about 60 minutes)
+# Lab 2 — Teams and the data flow (about 60 minutes)
 
 ## Step 9 — Create the Teams webhook
 
@@ -191,21 +191,9 @@ The URL is a **secret**. Store it like this:
    ```
 2. **`terraform/environments/dev/teams.auto.tfvars` (ignored by Git).** Only needed when you run `terraform apply` on your own machine. Content: `teams_webhook_url = "<webhook-url>"`. Do not use `terraform.tfvars`: bootstrap rewrites it.
 3. Never commit the URL. Never paste it in chat or in a README.
-4. Run the manual **terraform** workflow again with **apply** ticked, so the Logic App gets the URL. Then upload the full file again (Step 6). This repeat run shows that uploads are **safe to repeat**: silver is overwritten, a new `gold/by-timestamp/` folder appears and `gold/latest/` shows the newest run. Teams shows **CC2026 P2 pipeline SUCCEEDED (Azure)** with cloud, pipeline, file name, run ID, UTC time (`yyyy-MM-dd HH:mm:ss`), the counts of silver and rejected rows and a run link.
+4. Run the manual **terraform** workflow again with **apply** ticked, so the Logic App gets the URL. Then upload the full file again (Step 6). This repeat run shows that uploads are **safe to repeat**: silver is overwritten, a new `gold/by-timestamp/` folder appears and `gold/latest/` shows the newest run. Teams shows **CC2026 P2 pipeline SUCCEEDED (Azure)** with cloud, pipeline, file name, run ID, UTC time (`yyyy-MM-dd HH:mm:ss`), the counts of silver and rejected rows and a run link. A different or small file replaces silver and `gold/latest/`: upload `energy_readings.csv` again to restore the normal state.
 
-## Step 11 — Make runs fail on purpose
-
-Upload each file like in Step 6 (container `bronze`, folder `raw`). Wait for the run to end before the next upload.
-
-1. `data/energy_invalid.csv` has no `kwh` column. The data flow checks the source schema and stops. Teams shows a red **FAILED (Azure)** card with the error.
-2. `data/energy_too_dirty.csv` has half of the `kwh` values empty. The data flow succeeds, but more than 10% of the rows are rejected. The reject-ratio check fails. Teams shows **Too many rejected rows**. `gold/latest/` is unchanged.
-3. A file with only the header line has no valid rows. Make it with `head -1 data/energy_sample.csv > data/energy_header_only.csv` and upload it. The run fails and Teams shows **No valid rows: nothing to publish**. `gold/latest/` keeps the last good data.
-
-In Monitor → **Pipeline runs** the red run has status *Failed*. Open it: the failed activity (**Run data flow** for file 1, **Check reject ratio** for files 2 and 3) shows the error message. The matching **Notify failed** activity succeeded: it sent the red card. Without Teams, look at the Logic App run history.
-
-A different or small file that passes the check replaces silver and `gold/latest/`. Upload `energy_readings.csv` again to restore the normal state.
-
-## Step 12 — Study the pipeline
+## Step 11 — Study the pipeline
 
 Open `terraform/modules/data-factory/dataflow/energy_etl.dfs` (`//` starts a comment). Read it top to bottom and find:
 1. The **source** `BronzeCsv`: reads `bronze/raw/<file>` and checks the schema.
@@ -217,7 +205,7 @@ Open `terraform/modules/data-factory/dataflow/energy_etl.dfs` (`//` starts a com
 
 You must be able to explain what bronze, silver and gold contain and why the backend reads only `gold/latest/`.
 
-## Step 13 — Next: Apps challenge
+## Step 12 — Next: Apps challenge
 
 The backend reads **only `gold/latest/`** (settings `STORAGE_ACCOUNT_URL`, `GOLD_CONTAINER=gold`). Your instructor gives you the PR number of the Apps repository. In your Apps repository, on `main`, run:
 
@@ -239,7 +227,7 @@ Then open `docs/p2/challenge.md` and follow it.
 **Budget.** Azure for Students gives about 80 USD until January. P1 costs about 17 USD per month (about 51 USD for three months). P2 must stay under about 4 USD.
 - One data flow run bills about 0.6 core-hours, about 0.17 USD (measured in a real run; the core-hour price is an approximate figure). Keep it to about 15 runs. Storage, Logic App, Event Grid and pipeline runs cost cents.
 - **The expensive mistake is a Data Factory Studio debug session left on** (about 2 USD per hour, default time to live 60 minutes). Switch *Data flow debug* on only when you test, set the time to live to 15 minutes, switch it off when you finish.
-- Guardrails: (1) Portal → **Cost Management + Billing → Budgets → Create**: amount 60, alerts at 80% and 100%, your email. (2) Wait for the green or red card before the next upload. (3) Never delete the P1 resources: P3 needs them.
+- Guardrails: (1) Portal → **Cost Management + Billing → Budgets → Create**: amount 60, alerts at 80% and 100%, your email. (2) Wait for the end of the run (Monitor, or the Teams card) before the next upload. (3) Never delete the P1 resources: P3 needs them.
 
 ## Troubleshooting
 
@@ -252,7 +240,7 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 | `403 AuthorizationPermissionMismatch`, or "not authorized to perform this operation using this permission" in the portal | Do Step 5. Wait 5 minutes. Portal: use the Entra user account method. CLI: `--auth-mode login`, never `--account-key` |
 | No Teams card (curl shows 202, or pipeline succeeded) | Power Automate → My flows → run history. Check `TEAMS_WEBHOOK_URL` and Portal → Logic App → *Runs history* |
 | Run *Failed* with a schema error on a good file | The CSV header differs from the six column names. Compare with `head -1 data/energy_readings.csv` |
-| Red card: `Too many rejected rows` or `No valid rows` | More than 10% of the rows were rejected, or no row was valid. Read `silver/rejected/rejected_rows.csv`. Fix the file or the rules. `gold/by-timestamp/` and `gold/latest/` were not changed. Upload a good file to restore silver |
+| Run *Failed* with `Too many rejected rows` or `No valid rows` | More than 10% of the rows were rejected, or no row was valid. Read `silver/rejected/rejected_rows.csv`. Fix the file or the rules. `gold/by-timestamp/` and `gold/latest/` were not changed. Upload a good file to restore silver |
 | `Copy to history` or `Copy to latest` fails with `403` | Data Factory role not active yet. Wait 5 minutes and upload again |
 | `RequestDisallowedByAzure`, `RequestDisallowedByPolicy` or `LocationNotAvailableForResourceType` | Region policy of Azure for Students. Portal → Policy → Assignments → *Allowed resource deployment regions*. Pick an allowed region, set `AZURE_LOCATION`, re-run bootstrap. We did not check Data Factory and Logic App availability in each region. Not verified |
 | Data flow fails to start with a core quota error (`... cores quota ... exceeded`) | The subscription has no compute quota for the data flow in this region. Request quota (Portal → Help + support → Service and subscription limits) or try another allowed region. Not verified on a student subscription |
