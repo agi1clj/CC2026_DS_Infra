@@ -56,6 +56,21 @@ DailyTotals derive(total_kwh = round(total_kwh, 3),
 // 8. SORT: nicer output order. asc(column, true) = ascending, nulls last.
 RoundDaily sort(asc(device_id, true),
 	asc(date, true)) ~> SortDaily
+// 8b. SORT + LIMIT (provided example 2): newest 200 clean readings. Timestamps are ISO 8601 text, so text order = time order.
+AddTypedColumns sort(desc(timestamp, true),
+	desc(device_id, true)) ~> SortLatest
+SortLatest limit(200) ~> Latest200
+// 8c. SELECT: keep only the six output columns (not event_time and date).
+Latest200 select(mapColumn(
+		device_id,
+		timestamp,
+		temperature,
+		humidity,
+		kwh,
+		location
+	),
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true) ~> LatestColumns
 // 9. SINKS: silver = Parquet (folder cleared on each run); gold = one JSON file. partitionBy('hash', 1) = one output partition = one file.
 SilverColumns sink(allowSchemaDrift: true,
 	validateSchema: false,
@@ -77,6 +92,15 @@ SortDaily sink(allowSchemaDrift: true,
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true,
 	partitionBy('hash', 1)) ~> GoldDaily
+LatestColumns sink(allowSchemaDrift: true,
+	validateSchema: false,
+	partitionFileNames:['latest_readings.json'],
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> GoldLatest
 // Rejected rows: one CSV file silver/rejected/rejected_rows.csv with the reason (folder cleared on each run).
 AddRejectReason sink(allowSchemaDrift: true,
 	validateSchema: false,

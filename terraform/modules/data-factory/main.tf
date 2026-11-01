@@ -11,8 +11,9 @@ locals {
   transformations = [
     "CleanRows", "AddRejectReason", "DropDuplicates", "AddTypedColumns", "SilverColumns", "DailyTotals", "RoundDaily",
     "SortDaily",
+    "SortLatest", "Latest200", "LatestColumns",
   ]
-  gold_sinks = ["GoldDaily"]
+  gold_sinks = ["GoldDaily", "GoldLatest"]
 
   # Pipeline activities whose failure sends the red Teams card.
   failed_activities = ["Run data flow", "Check reject ratio", "Copy to latest"]
