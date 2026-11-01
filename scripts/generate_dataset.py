@@ -2,7 +2,7 @@
 """Generate the CC2026 P2 energy dataset (standard library only, deterministic).
 
     python3 generate_dataset.py                      # writes ./energy_readings.csv (525,600 rows)
-    python3 generate_dataset.py --sample             # also writes energy_sample.csv and energy_invalid.csv
+    python3 generate_dataset.py --sample             # also writes energy_sample.csv, energy_invalid.csv and energy_too_dirty.csv
     python3 generate_dataset.py --expected-gold DIR  # also writes the expected gold JSON files to DIR
 
 Same devices as the P1 mock data (device-001 .. device-005). One reading every 5 minutes
@@ -171,7 +171,7 @@ def write_expected_gold(directory, raw_rows):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", type=Path, default=Path("."), help="output directory (default: current directory)")
-    parser.add_argument("--sample", action="store_true", help="also write energy_sample.csv and energy_invalid.csv")
+    parser.add_argument("--sample", action="store_true", help="also write energy_sample.csv, energy_invalid.csv and energy_too_dirty.csv")
     parser.add_argument("--expected-gold", type=Path, help="write the expected gold JSON files to this directory")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -188,6 +188,10 @@ def main():
         # Missing the kwh column: the data flow rejects it (schema validation) and Teams reports a failure.
         count = write_csv(args.out / "energy_invalid.csv", first_day[:50], header=[h for h in HEADER if h != "kwh"])
         print(f"{args.out / 'energy_invalid.csv'}: {count} rows (no kwh column, must fail)")
+        # Half of the kwh values are empty: more than 10% of the rows are rejected, the drop-ratio check fails the run.
+        too_dirty = [{**row, "kwh": ""} if i % 2 else row for i, row in enumerate(first_day)]
+        count = write_csv(args.out / "energy_too_dirty.csv", too_dirty)
+        print(f"{args.out / 'energy_too_dirty.csv'}: {count} rows (half of kwh empty, must fail the ratio check)")
 
     if args.expected_gold:
         write_expected_gold(args.expected_gold, rows)
