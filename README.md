@@ -42,7 +42,7 @@ More diagrams (conceptual, UML deployment, CI/CD): [docs/architecture.md](docs/a
 | App Service Plan (Linux, B1) | `asp-cc2026-agi-dev` | Terraform | One shared VM for both apps |
 | Linux Web App (container) | `cc2026-api-agi-dev-<4 hex>` | Terraform | Backend, port 8000 |
 | Linux Web App (container) | `cc2026-ui-agi-dev-<4 hex>` | Terraform | Frontend, port 8080 |
-| Storage account (ADLS Gen2) + containers `bronze`, `silver`, `gold` | `stcc2026agidev<4 hex>` | Terraform | P2 data lake. LRS, TLS 1.2, no shared keys, no public access |
+| Storage account (ADLS Gen2) + containers `bronze`, `silver`, `gold` | `stcc2026agidev<4 hex>` | Terraform | P2 data lake. LRS, TLS 1.2, no shared keys, no public access, blob and container soft delete (7 days) |
 | Data Factory (system-assigned identity, live mode) | `adf-cc2026-agi-dev-<4 hex>` | Terraform | P2 pipeline `pl-energy-etl`, data flow, blob event trigger |
 | Logic App (Consumption) | `logic-cc2026-agi-dev-notify` | Terraform | P2: turns the pipeline status into a Teams card |
 
@@ -335,7 +335,7 @@ Stopping a Web App or turning off Always On on B1 saves nothing: B1 is billed pe
 
 P2 (data pipeline: bronze/silver/gold in Blob Storage, Data Factory, Teams notification) is implemented. Start with [docs/p2/student-walkthrough.md](docs/p2/student-walkthrough.md). Data Factory is owned by Terraform (live mode, no Git integration): the data flow script is `terraform/modules/data-factory/dataflow/energy_etl.dfs`. Never edit it in the portal.
 
-**Provided vs student work.** Provided: storage, Data Factory, trigger, pipeline, Teams notification, roles, the silver Parquet output and one gold file (`daily_energy_by_device.json`) as a worked example. Students build the gold files `energy_by_location.json` and `latest_readings.json` in the data flow script (Lab 2 of the walkthrough). A third time-grouping gold file and an extra data-quality rule are an optional bonus.
+**Provided vs student work.** Provided: storage, Data Factory, trigger, pipeline, Teams notification, roles, the silver Parquet output, the rejected-rows CSV (`silver/rejected/`, with a reason), a reject-ratio check (`maxRejectRatio`, default 10%: above it the run fails and `gold/latest/` is not updated) and one gold file (`daily_energy_by_device.json`) as a worked example. Students build the gold files `energy_by_location.json` and `latest_readings.json` in the data flow script (Lab 2 of the walkthrough). A third time-grouping gold file and an extra data-quality rule are an optional bonus.
 
 Modules, app settings, identity outputs, the RBAC allow-list and the backend data source are extension points for P3. See [docs/extending.md](docs/extending.md).
 

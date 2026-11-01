@@ -4,8 +4,10 @@ P2 adds an ETL pipeline (extract, transform, load) to your P1 infrastructure. Yo
 
 ```text
 upload CSV -> bronze/raw/ -> storage event -> Data Factory pipeline -> Mapping Data Flow
-                                                  |                       |-> silver/ (clean Parquet)
-                                                  |                       '-> gold/by-timestamp/<run>/ (history) -> Copy -> gold/latest/
+                                                  |                       |-> silver/energy_readings/ (clean Parquet)
+                                                  |                       |-> silver/rejected/ (bad rows + reason)
+                                                  |                       '-> gold/by-timestamp/<run>/ (history)
+                                                  |-> reject-ratio check -> Copy -> gold/latest/
                                                   '-> Logic App -> Teams card (SUCCEEDED / FAILED)
 ```
 
@@ -14,7 +16,7 @@ New terms: **Data Factory** runs the pipeline. A **Mapping Data Flow** transform
 | Zone | Container | Content |
 |---|---|---|
 | bronze | `bronze` | Raw upload. You never change it |
-| silver | `silver` | Clean, typed Parquet: `energy_readings/` |
+| silver | `silver` | `energy_readings/`: clean, typed Parquet. `rejected/rejected_rows.csv`: removed bad rows with a `reject_reason` |
 | gold | `gold` | Small JSON files. Every run writes `by-timestamp/<yyyyMMddTHHmmssZ>/<file>.json` (history, never deleted). Then it copies them to `latest/`. The backend reads **only `gold/latest/`** |
 
 ### Medallion in one minute
@@ -27,23 +29,15 @@ The same reading travels through three layers. Each layer answers one question.
 | Silver | Which rows can we trust? | The same reading with real types: `timestamp` is a timestamp, `kwh` is a number, one row per `device_id` + `timestamp`. Stored as Parquet in `silver/energy_readings/` |
 | Gold | What does the dashboard ask? | 288 silver readings of one day become 1 record: `{"device_id":"device-001","location":"Office-A","date":"2025-11-01","total_kwh":18.419,"avg_temperature":21.09,"avg_humidity":55.02,"readings":288}` |
 
-You never change bronze. Each layer is rebuilt from the layer before it, so uploading again is safe. Only the pipeline reads silver. The backend reads only gold.
-
 ## What is provided and what you build
 
 | Part | Who |
 |---|---|
-| Storage, Data Factory, trigger, pipeline, Teams notification, roles, silver (clean Parquet) | **Provided** (Terraform) |
-| Gold file `daily_energy_by_device.json` | **Provided**: the worked example |
+| Storage, Data Factory, trigger, pipeline, Teams notification, roles, silver, rejected rows, gold `daily_energy_by_device.json` (the worked example) | **Provided** (Terraform) |
 | Gold files `energy_by_location.json` and `latest_readings.json` | **You build them** (Lab 2) |
 | A third gold file of your own and an extra data-quality rule | Optional bonus |
 
-- **Lab 1** (Steps 1 to 11): deploy, upload the CSV, see the green Teams card, then the red card.
-- **Lab 2** (Steps 12 to 15): write the two gold files. **Next** (Step 16): the Apps challenge.
-
-Use the P1 placeholders (`<LastName>_<FirstName>`, `<github-user>`). Time: about 60 minutes. **Do not edit the Data Factory portal.** It is for watching only. Terraform overwrites portal edits.
-
----
+**Lab 1** (Steps 1 to 11): deploy, upload the CSV, see the green card, then the red card. **Lab 2** (Steps 12 to 15): write the two gold files. **Next** (Step 16): the Apps challenge. Use the P1 placeholders. Time: about 60 minutes. **Do not edit the Data Factory portal.** It is for watching only. Terraform overwrites portal edits.
 
 # Lab 1 — Deploy and run the pipeline
 
@@ -70,19 +64,17 @@ az login
 ./bootstrap/bootstrap.sh
 ```
 
-Re-running is safe. Run it again whenever Azure or GitHub asks for it.
-
 ## Step 3 — Create the Teams webhook
 
 The old "Incoming Webhook" connector is retired. Use a **Workflow** (Power Automate).
 
 1. In Teams, open a channel (a private channel in your own team is fine). Click **More options (…) → Workflows**.
-2. Pick **Send webhook alerts to a channel**. Name it `cc2026-p2`. Select team and channel. Click **Add workflow**.
+2. Pick **Send webhook alerts to a channel**. Some tenants show it as **Post to a channel when a webhook request is received**. Name it `cc2026-p2`. Select team and channel. Click **Add workflow**.
 3. Copy the **webhook URL**. Find it later in **Power Automate → My flows → your flow → trigger**.
 
 No template? Build a blank flow. Trigger: **When a Teams webhook request is received** (*Anyone*). Action: **Post card in a chat or channel** (as *Flow bot*, Adaptive Card = `triggerBody()?['attachments']?[0]?['content']`).
 
-Test the URL. A card "hello from CC2026" must appear in the channel. `202 Accepted` means Power Automate got the request.
+Test the URL. A card "hello from CC2026" must appear. `202 Accepted` means Power Automate got the request.
 
 ```bash
 curl -i -X POST -H "Content-Type: application/json" \
@@ -97,9 +89,7 @@ gh secret set TEAMS_WEBHOOK_URL --repo <github-user>/CC2026_<LastName>_<FirstNam
 echo 'teams_webhook_url = "<webhook-url>"' > terraform/environments/dev/teams.auto.tfvars   # git-ignored
 ```
 
-Use `teams.auto.tfvars`, not `terraform.tfvars`. Bootstrap rewrites `terraform.tfvars` on every run. It never touches `teams.auto.tfvars`.
-
-Your tenant may block Workflows. Ask your instructor or use a personal account. Without a URL the pipeline works but sends no card.
+Use `teams.auto.tfvars`, not `terraform.tfvars`. Bootstrap rewrites `terraform.tfvars` on every run and never touches `teams.auto.tfvars`. Your tenant may block Workflows: ask your instructor or use a personal account. Without a URL the pipeline works but sends no card.
 
 ## Step 4 — Get the dataset
 
@@ -110,20 +100,13 @@ python3 scripts/generate_dataset.py --out data
 head -3 data/energy_readings.csv
 ```
 
-Columns: `device_id,timestamp,temperature,humidity,kwh,location`. About 1% of the rows are dirty. Silver removes them.
+Columns: `device_id,timestamp,temperature,humidity,kwh,location`. About 1% of the rows are dirty:
 
-| Dirty row | Silver rule |
-|---|---|
-| Duplicate (`device_id` + `timestamp`) | Keep the first |
-| `kwh` empty or negative | Remove |
-| `humidity` below 0 or above 100 | Remove |
-| `temperature` outside -40 to 60 (for example `-999`) | Remove |
+The data flow writes rows with `kwh` empty or negative, `humidity` outside 0 to 100 or `temperature` outside -40 to 60 (for example `-999`) to `silver/rejected/` with a `reject_reason`. It keeps the first row of a duplicate (`device_id` + `timestamp`). The pipeline counts the other duplicates and writes nothing.
 
 ## Step 5 — Deploy with the terraform workflow
 
-Run `git push origin HEAD:main`. Open *Actions → terraform → Run workflow*. Untick **apply** to read the plan. Then run it with **apply** ticked.
-
-The plan adds storage, Data Factory (pipeline `pl-energy-etl`, data flow, trigger), the Logic App and roles. It sets `STORAGE_ACCOUNT_URL` and `GOLD_CONTAINER` on the backend Web App.
+Run `git push origin HEAD:main`. Open *Actions → terraform → Run workflow*. Untick **apply** to read the plan. Then run it with **apply** ticked. The plan adds storage, Data Factory, the Logic App and roles.
 
 If bootstrap printed `CI_CAN_ASSIGN_ROLES=false`, the workflow stops before apply. Apply once from your laptop:
 
@@ -160,27 +143,25 @@ az storage blob upload --auth-mode login --account-name "$STORAGE" \
   --file data/energy_readings.csv --overwrite
 ```
 
-The upload starts `pl-energy-etl`.
-
 ## Step 8 — Watch the run in Data Factory
 
-Portal → Data Factory (`terraform output data_factory_name`) → **Launch studio → Monitor → Pipeline runs**. Expect *In progress*, then *Succeeded*. The first run needs about 5 minutes (Spark cold start). Do not start a second run.
+Portal → Data Factory (`terraform output data_factory_name`) → **Launch studio → Monitor → Pipeline runs**. Expect *In progress*, then *Succeeded*. The first run needs about 5 minutes (Spark cold start). Do not start a second run. The pipeline checks the data before it updates `gold/latest/`. If more than 10% of the rows read are rejected (parameter `maxRejectRatio`, default `0.10`), the run fails with a red card. Silver, `silver/rejected/` and `gold/by-timestamp/` are already written at that point. Only `gold/latest/` stays unchanged.
 
 ## Step 9 — Check silver and gold
 
 ```bash
-for c in silver/energy_readings/ gold/by-timestamp/ gold/latest/; do
+for c in silver/energy_readings/ silver/rejected/ gold/by-timestamp/ gold/latest/; do
   az storage blob list --auth-mode login --account-name "$STORAGE" --container-name "${c%%/*}" --prefix "${c#*/}" --output table
 done
 az storage blob download --auth-mode login --account-name "$STORAGE" --container-name gold \
   --name latest/daily_energy_by_device.json --file /tmp/daily_energy_by_device.json && head -c 400 /tmp/daily_energy_by_device.json
 ```
 
-`by-timestamp/` has one folder per run, like `20261101T093000Z/`. `latest/` copies the newest run. The full dataset gives 1825 records in `daily_energy_by_device.json`.
+`silver/rejected/rejected_rows.csv` ends with the column `reject_reason`. `by-timestamp/` has one folder per run, like `20261101T093000Z/`. `latest/` copies the newest run. The full dataset gives 1825 records in `daily_energy_by_device.json`.
 
 ## Step 10 — See the SUCCEEDED card in Teams
 
-Teams shows **CC2026 P2 pipeline SUCCEEDED** with file name, run ID, rows written and a run link.
+Teams shows **CC2026 P2 pipeline SUCCEEDED** with file name, run ID, a run link and the counts: rows read, silver, rejected and duplicates removed.
 
 ## Step 11 — Make a run fail on purpose
 
@@ -194,13 +175,7 @@ az storage blob upload --auth-mode login --account-name "$STORAGE" \
 
 Monitor shows *Failed*. Teams shows **CC2026 P2 pipeline FAILED** with the error. Silver and gold keep the last good run.
 
-## Safe to repeat
-
-- The **same file** again, even 3 times: safe. Silver is overwritten. Each run adds a `gold/by-timestamp/` folder. `gold/latest/` shows the newest run. Runs queue one at a time. You get 3 cards.
-- A **different or small file** replaces silver and `gold/latest/`. History stays. Upload `energy_readings.csv` again to restore.
-- Each upload costs about €0.3. Wait for the Teams card before the next upload.
-
----
+**Safe to repeat.** The same file 3 times: safe. Silver is overwritten, each run adds a `gold/by-timestamp/` folder, `gold/latest/` shows the newest run, runs queue one at a time, you get 3 cards. A different or small file replaces silver and `gold/latest/`: upload `energy_readings.csv` again to restore. Wait for the Teams card before the next upload.
 
 # Lab 2 — Write the two gold files
 
@@ -247,20 +222,12 @@ LocationTotals derive(avg_kwh_per_day = <<TODO: total_kwh divided by days, round
     total_kwh = round(total_kwh, 3)) ~> RoundLocation
 RoundLocation select(mapColumn(location, total_kwh, devices, avg_kwh_per_day),
     skipDuplicateMapInputs: true, skipDuplicateMapOutputs: true) ~> LocationColumns
-LocationColumns sink(allowSchemaDrift: true, validateSchema: false,
-    partitionFileNames:['energy_by_location.json'],
-    umask: 0022, preCommands: [], postCommands: [],
-    skipDuplicateMapInputs: true, skipDuplicateMapOutputs: true,
+LocationColumns sink(allowSchemaDrift: true, validateSchema: false, partitionFileNames:['energy_by_location.json'],
+    umask: 0022, preCommands: [], postCommands: [], skipDuplicateMapInputs: true, skipDuplicateMapOutputs: true,
     partitionBy('hash', 1)) ~> GoldLocation
 ```
 
-**`latest_readings`: hint.** Start from `AddTypedColumns`. Use three steps:
-
-1. `sort(desc(timestamp, true), desc(device_id, true))`. ISO 8601 text sorts correctly.
-2. `limit(200)`.
-3. `select(mapColumn(...))` with only the six output columns (not `event_time` and `date`).
-
-Finish with a sink like the one above. Use `partitionFileNames:['latest_readings.json']` and the name `GoldLatest`.
+**`latest_readings`: hint.** Start from `AddTypedColumns`. Use three steps: (1) `sort(desc(timestamp, true), desc(device_id, true))`: ISO 8601 text sorts correctly. (2) `limit(200)`. (3) `select(mapColumn(...))` with only the six output columns (not `event_time` and `date`). Finish with a sink like the one above: `partitionFileNames:['latest_readings.json']`, name `GoldLatest`.
 
 **How to work:**
 
@@ -269,18 +236,12 @@ Finish with a sink like the one above. Use `partitionFileNames:['latest_readings
 3. Open the **Code `{ }`** view and copy your new lines.
 4. Paste them into `terraform/modules/data-factory/dataflow/energy_etl.dfs`.
 5. In `terraform/modules/data-factory/main.tf`, add the new stream names to `local.transformations`. Add `GoldLocation` and `GoldLatest` to `local.gold_sinks`.
-6. Commit, push to `main` and run the **terraform** workflow with **apply** ticked:
-
-   ```bash
-   git commit -am "feat(data-factory): add gold files by location and latest readings"
-   git push origin HEAD:main
-   ```
-
+6. Commit (`feat(data-factory): add gold files by location and latest readings`) and push to `main`. Run the **terraform** workflow with **apply** ticked.
 7. Upload `energy_readings.csv` again (Step 7). After the green card, your files are in `gold/latest/`.
 
 ## Step 14 — Check your result
 
-Set `APPS_REPO` to your Apps repository folder. Then compare:
+Compare with the expected files (set `APPS_REPO` to your Apps repository folder):
 
 ```bash
 APPS_REPO=../CC2026_<LastName>_<FirstName>_Apps
@@ -296,30 +257,31 @@ done
 
 ## Step 15 — Change a cleaning rule (and optional bonus)
 
-The cleaning rules are in the stream `CleanRows`. Change the temperature limit `60` to `30`. Push, run the workflow, upload again and compare row counts in Monitor. Change it back.
+The cleaning rules are in the split `CleanRows`. Change the temperature limit `60` to `30`. Push, run the workflow, upload again and compare the counts in the Teams card. Change it back.
 
 **Bonus (optional):**
 
 - A third gold file by hour of day (24 records), weekday (7) or month (12). Use `hour(event_time)`, `dayOfWeek(event_time)` or `month(event_time)` in a `derive`, then an `aggregate`.
-- One more rule in `CleanRows`, like `kwh <= 5`. Upload a CSV with one bad row as `raw/bad_row.csv`. Show in Monitor that silver misses it.
+- One more rule: add a condition to the split `CleanRows` (like `kwh > 5`) and a reason in `AddRejectReason`. Upload a CSV with one bad row as `raw/bad_row.csv`. Find the row in `silver/rejected/`.
 
 ## Step 16 — Next: Apps challenge
 
 The backend reads **only `gold/latest/`** (settings `STORAGE_ACCOUNT_URL`, `GOLD_CONTAINER=gold`). Follow `docs/p2/challenge.md` in the Apps repository.
 
----
+## Limits
+
+- Every upload is a full refresh. Production appends or merges (for example with Delta or Iceberg).
+- The data flow has no unit tests. The AWS Python script has them.
+- A Spark data flow for a 32 MB file is a teaching choice. A small script would be faster and cheaper.
+- The webhook URL is stored in the Terraform state and in the Logic App definition. We accept this limit. This course has no Key Vault.
 
 ## Cost
 
 One data flow run costs about €0.3. Ten test runs cost about €3 on top of P1. Idle resources cost cents.
 
 - Each upload starts one run. **Wait for the Teams card before the next upload.**
-- **The expensive trap is the Data Factory Studio debug session.** It keeps a Spark cluster running. The default time to live is 60 minutes. Follow these rules:
-  1. Switch *Data flow debug* on only when you test.
-  2. Set the debug **time to live to 15 minutes**.
-  3. Switch it off when you finish.
-  4. Check **Monitor** and **Cost Management → Cost analysis** (filter on your resource group) after each lab.
-- Do not upload the big file in a loop. **Delete nothing until the final evaluation.** P3 and the final project use the same infrastructure.
+- **The expensive trap is the Data Factory Studio debug session.** It keeps a Spark cluster running for the whole session (default time to live: 60 minutes, about €2 per hour). Switch *Data flow debug* on only when you test. Set the debug **time to live to 15 minutes**. Switch it off when you finish. Check **Monitor** and **Cost Management → Cost analysis** after each lab.
+- **Delete nothing until the final evaluation.** P3 and the final project use the same infrastructure.
 
 ## Troubleshooting
 
@@ -328,13 +290,11 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 | Symptom | Fix |
 |---|---|
 | `MissingSubscriptionRegistration` or `SubscriptionNotRegistered` for `Microsoft.EventGrid`, `Microsoft.DataFactory` or `Microsoft.Logic` | Re-run `bootstrap.sh`, or run `az provider register --namespace Microsoft.EventGrid --wait` |
-| Workflow stops: plan creates role assignments | `CI_CAN_ASSIGN_ROLES=false`. Run `terraform apply` locally (Step 5) |
 | Upload works, no pipeline run | Upload to `raw/<name>.csv` in container `bronze`. Check *Manage → Triggers*: status *Started*. Wait 1–2 minutes |
 | `403 AuthorizationPermissionMismatch` | Do Step 6. Wait 5 minutes. Use `--auth-mode login`, never `--account-key` |
-| curl shows 202, no Teams message | Power Automate → My flows → run history. The flow must post to a channel |
-| Pipeline succeeded, no card | Check `TEAMS_WEBHOOK_URL`. Portal → Logic App → *Runs history* |
+| No Teams card (curl shows 202, or pipeline succeeded) | Power Automate → My flows → run history. Check `TEAMS_WEBHOOK_URL` and Portal → Logic App → *Runs history* |
 | Run *Failed* with a schema error on a good file | The CSV header differs from the six column names. Compare with `head -1 data/energy_readings.csv` |
+| Red card: `Too many rejected rows` | More than 10% of the rows were rejected. Read `silver/rejected/rejected_rows.csv`. Fix the file or the rules. `gold/latest/` was not changed |
 | `Copy to latest` fails with `403` | Data Factory role not active yet. Wait 5 minutes and upload again |
-| `RequestDisallowedByPolicy`, `LocationNotAvailableForResourceType` | Azure for Students limits regions and types. Re-run bootstrap with an allowed region (`AZURE_LOCATION=...`). Else ask your instructor. Not verified |
+| `RequestDisallowedByAzure`, `RequestDisallowedByPolicy` or `LocationNotAvailableForResourceType` | Region policy of Azure for Students. Portal → Policy → Assignments → *Allowed resource deployment regions*. Pick an allowed region, set `AZURE_LOCATION`, re-run bootstrap. We did not check Data Factory and Logic App availability in each region. Not verified |
 | `... cores quota ... exceeded` or `Operation cannot be completed without additional quota` | Low vCore quota. Ask your instructor. Try later or use another region. Not verified |
-| `StorageAccountAlreadyTaken` | Name not unique. Change `project_name` or ask your instructor. Not verified |
