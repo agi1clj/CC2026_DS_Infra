@@ -3,7 +3,7 @@
 Terraform, bootstrap and CI/CD for the *Cloud Computing* project (UTCN, 2026–2027). It starts with Project Part 1 and is extended in later parts. This repository creates the Azure resources that run the applications from the companion repository.
 
 > Students: name your copy `CC2026_LastName_FirstName_Infra`. This reference copy is called `CC2026_DS_Infra`.
-> **Start with [docs/student-walkthrough.md](docs/student-walkthrough.md)**. It takes you from zero to working URLs in order.
+> **Start with [docs/p1/student-walkthrough.md](docs/p1/student-walkthrough.md)**. It takes you from zero to working URLs in order.
 
 ## 1. Infrastructure architecture
 
@@ -333,7 +333,7 @@ Stopping a Web App or turning off Always On on B1 saves nothing: B1 is billed pe
 
 ## 16. Extending (P2/P3)
 
-P2 (data pipeline: bronze/silver/gold in Blob Storage, Data Factory, Teams notification) is implemented. Start with [docs/p2-walkthrough.md](docs/p2-walkthrough.md). Data Factory is owned by Terraform (live mode, no Git integration): the data flow script is `terraform/modules/data-factory/dataflow/energy_etl.dfs`. Never edit it in the portal.
+P2 (data pipeline: bronze/silver/gold in Blob Storage, Data Factory, Teams notification) is implemented. Start with [docs/p2/student-walkthrough.md](docs/p2/student-walkthrough.md). Data Factory is owned by Terraform (live mode, no Git integration): the data flow script is `terraform/modules/data-factory/dataflow/energy_etl.dfs`. Never edit it in the portal.
 
 **Provided vs student work.** Provided: storage, Data Factory, trigger, pipeline, Teams notification, roles, the silver Parquet output and one gold file (`daily_energy_by_device.json`) as a worked example. Students build the gold files `energy_by_location.json` and `latest_readings.json` in the data flow script (Lab 2 of the walkthrough). A third time-grouping gold file and an extra data-quality rule are an optional bonus.
 

@@ -238,7 +238,7 @@ SortDaily sink(... partitionFileNames:['daily_energy_by_device.json'],   // one 
 | `energy_by_location.json` | 5 records `{location, total_kwh, devices, avg_kwh_per_day}`. `total_kwh` and `avg_kwh_per_day` have 3 decimals. `avg_kwh_per_day` = total kWh / number of different days |
 | `latest_readings.json` | 200 records `{device_id, timestamp, temperature, humidity, kwh, location}`: the newest clean readings, newest first. `timestamp` stays text, like `2026-10-31T23:55:00Z` |
 
-The correct files are in the Apps repository: `docs/p2-sample-data/gold/`. Your sinks use the same dataset as `GoldDaily`, so they write to the run folder automatically. The pipeline then copies the run folder to `gold/latest/`: you do not write any copy code.
+The correct files are in the Apps repository: `docs/p2/sample-data/gold/`. Your sinks use the same dataset as `GoldDaily`, so they write to the run folder automatically. The pipeline then copies the run folder to `gold/latest/`: you do not write any copy code.
 
 **`energy_by_location`: fill the gaps.** Start from the stream `DailyTotals`. It comes before the rounding, so your sums stay exact.
 
@@ -292,7 +292,7 @@ mkdir -p out
 for f in energy_by_location latest_readings; do
   az storage blob download --auth-mode login --account-name "$STORAGE" \
     --container-name gold --name "latest/$f.json" --file "out/$f.json" --overwrite
-  diff <(jq -S -s 'flatten' "out/$f.json") <(jq -S -s 'flatten' "$APPS_REPO/docs/p2-sample-data/gold/$f.json") && echo "$f OK"
+  diff <(jq -S -s 'flatten' "out/$f.json") <(jq -S -s 'flatten' "$APPS_REPO/docs/p2/sample-data/gold/latest/$f.json") && echo "$f OK"
 done
 ```
 
@@ -308,7 +308,7 @@ All cleaning rules are in the stream `CleanRows`. Change the temperature limit f
 
 ## Step 16 — Next: Apps challenge
 
-The backend has read access to the storage account and the settings `STORAGE_ACCOUNT_URL` and `GOLD_CONTAINER=gold`. It reads **only `gold/latest/`**. Go to the Apps repository and follow `docs/p2-challenge.md`. You read the gold files in the backend and show charts in the frontend.
+The backend has read access to the storage account and the settings `STORAGE_ACCOUNT_URL` and `GOLD_CONTAINER=gold`. It reads **only `gold/latest/`**. Go to the Apps repository and follow `docs/p2/challenge.md`. You read the gold files in the backend and show charts in the frontend.
 
 ---
 

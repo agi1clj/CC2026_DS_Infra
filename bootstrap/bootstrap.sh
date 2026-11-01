@@ -132,7 +132,7 @@ check_dependencies() {
   info "Checking required tools"
   local tool
   for tool in az gh terraform git; do
-    command -v "$tool" >/dev/null 2>&1 || die "'$tool' is not installed. See docs/student-walkthrough.md > Tools to install first."
+    command -v "$tool" >/dev/null 2>&1 || die "'$tool' is not installed. See docs/p1/student-walkthrough.md > Tools to install first."
   done
   ok "az, gh, terraform and git are installed"
 }
