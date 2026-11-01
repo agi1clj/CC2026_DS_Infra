@@ -31,3 +31,13 @@ module "app_service" {
   container_registry_login_server = module.container_registry.login_server
   tags                            = local.tags
 }
+
+# P2 data lake: bronze (raw), silver (clean Parquet), gold (JSON for the backend).
+module "storage" {
+  source = "../../modules/storage"
+
+  name                = local.storage_account_name
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  tags                = local.tags
+}
