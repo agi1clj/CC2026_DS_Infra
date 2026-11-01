@@ -2,8 +2,8 @@
 # no Git integration). Do not edit resources in the ADF portal: the next apply overwrites them.
 #
 #   blob created in bronze/raw/*.csv -> storage event trigger -> pipeline pl-energy-etl
-#   pipeline = Mapping Data Flow (bronze CSV -> silver Parquet, rejected rows CSV, gold JSON in gold/by-timestamp/<run>/)
-#              -> reject-ratio check -> Copy to gold/latest/ -> Web activity -> Logic App -> Teams
+#   pipeline = Mapping Data Flow (bronze CSV -> silver Parquet, rejected rows CSV, gold JSON in gold/_staging/)
+#              -> reject-ratio check -> Copy to gold/by-timestamp/<run>/ and gold/latest/ -> Web activity -> Logic App -> Teams
 
 locals {
   # Names used in dataflow/energy_etl.dfs. The azurerm resource needs them as blocks.
@@ -17,7 +17,7 @@ locals {
   gold_sinks = ["GoldDaily", "GoldLatest", "GoldLocation"]
 
   # Pipeline activities whose failure sends the red Teams card.
-  failed_activities = ["Run data flow", "Check reject ratio", "Copy to latest"]
+  failed_activities = ["Run data flow", "Check reject ratio", "Copy to history", "Copy to latest"]
 
   # Row counts from the data flow metrics (rowsWritten per sink). A sink that wrote zero rows has no entry, hence the contains().
   # The metric `sources` is empty for most sinks, so it is not used.
@@ -88,8 +88,6 @@ resource "azurerm_data_factory_dataset_parquet" "silver" {
   compression_codec = "snappy"
 }
 
-# The azurerm JSON and binary datasets do not support ADLS locations, so these use custom datasets.
-# Gold history: every run writes gold/by-timestamp/<runFolder>/<file>.json (never deleted).
 # Rejected rows: one CSV file with the reason, silver/rejected/rejected_rows.csv.
 resource "azurerm_data_factory_dataset_delimited_text" "silver_rejected" {
   name                = "ds_silver_rejected_csv"
@@ -108,11 +106,13 @@ resource "azurerm_data_factory_dataset_delimited_text" "silver_rejected" {
   first_row_as_header = true
 }
 
+# The azurerm JSON and binary datasets do not support ADLS locations, so these use custom datasets.
+# The data flow writes the three gold files to gold/_staging/ (overwritten on every run).
+# The pipeline then copies them to gold/by-timestamp/<run>/ (history, never deleted) and to gold/latest/.
 resource "azurerm_data_factory_custom_dataset" "gold_json" {
   name            = "ds_gold_json"
   data_factory_id = azurerm_data_factory.main.id
   type            = "Json"
-  parameters      = { runFolder = "19700101T000000Z" }
 
   linked_service {
     name = azurerm_data_factory_linked_service_data_lake_storage_gen2.lake.name
@@ -122,14 +122,33 @@ resource "azurerm_data_factory_custom_dataset" "gold_json" {
     location = {
       type       = "AzureBlobFSLocation"
       fileSystem = "gold"
-      folderPath = { value = "@concat('by-timestamp/', dataset().runFolder)", type = "Expression" }
+      folderPath = "_staging"
     }
   })
 }
 
-# Copy activity source: the files of one run.
-resource "azurerm_data_factory_custom_dataset" "gold_run_files" {
-  name            = "ds_gold_run_files"
+# Copy activity source: the staged gold files.
+resource "azurerm_data_factory_custom_dataset" "gold_staging" {
+  name            = "ds_gold_staging"
+  data_factory_id = azurerm_data_factory.main.id
+  type            = "Binary"
+
+  linked_service {
+    name = azurerm_data_factory_linked_service_data_lake_storage_gen2.lake.name
+  }
+
+  type_properties_json = jsonencode({
+    location = {
+      type       = "AzureBlobFSLocation"
+      fileSystem = "gold"
+      folderPath = "_staging"
+    }
+  })
+}
+
+# Copy activity sink: one folder per run. The pipeline passes runFolder (yyyyMMddTHHmmssZ).
+resource "azurerm_data_factory_custom_dataset" "gold_history" {
+  name            = "ds_gold_history"
   data_factory_id = azurerm_data_factory.main.id
   type            = "Binary"
   parameters      = { runFolder = "19700101T000000Z" }
@@ -213,8 +232,7 @@ resource "azurerm_data_factory_data_flow" "energy" {
       name = sink.value
 
       dataset {
-        name       = azurerm_data_factory_custom_dataset.gold_json.name
-        parameters = { runFolder = "$runTimestamp" }
+        name = azurerm_data_factory_custom_dataset.gold_json.name
       }
     }
   }
@@ -237,15 +255,16 @@ resource "azurerm_data_factory_pipeline" "energy_etl" {
   concurrency = 1
 
   activities_json = templatefile("${path.module}/pipeline/energy_etl.json.tftpl", {
-    data_flow_name      = azurerm_data_factory_data_flow.energy.name
-    gold_run_dataset    = azurerm_data_factory_custom_dataset.gold_run_files.name
-    gold_latest_dataset = azurerm_data_factory_custom_dataset.gold_latest.name
-    failed_activities   = local.failed_activities
-    rows_silver         = local.rows_silver
-    rows_rejected       = local.rows_rejected
-    notification_url    = var.notification_url
-    monitor_url_prefix  = local.monitor_url_prefix
-    factory_id_encoded  = urlencode(azurerm_data_factory.main.id)
+    data_flow_name       = azurerm_data_factory_data_flow.energy.name
+    gold_staging_dataset = azurerm_data_factory_custom_dataset.gold_staging.name
+    gold_history_dataset = azurerm_data_factory_custom_dataset.gold_history.name
+    gold_latest_dataset  = azurerm_data_factory_custom_dataset.gold_latest.name
+    failed_activities    = local.failed_activities
+    rows_silver          = local.rows_silver
+    rows_rejected        = local.rows_rejected
+    notification_url     = var.notification_url
+    monitor_url_prefix   = local.monitor_url_prefix
+    factory_id_encoded   = urlencode(azurerm_data_factory.main.id)
   })
 }
 

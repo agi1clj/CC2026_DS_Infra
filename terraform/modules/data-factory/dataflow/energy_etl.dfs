@@ -2,8 +2,7 @@
 // before it sends the script to Data Factory. Pattern for every step:  <input stream> <transformation>(...) ~> <new stream name>
 // When you add a transformation or a sink, also add its name to `locals` in ../main.tf.
 parameters{
-	sourceFile as string ('energy_readings.csv'),
-	runTimestamp as string ('19700101T000000Z')
+	sourceFile as string ('energy_readings.csv')
 }
 // 1. SOURCE: read bronze/raw/<sourceFile>. validateSchema: true = stop with an error if the file does not match the dataset columns.
 source(output(
@@ -107,7 +106,7 @@ SilverColumns sink(allowSchemaDrift: true,
 	skipDuplicateMapInputs: true,
 	skipDuplicateMapOutputs: true,
 	partitionBy('hash', 1)) ~> SilverParquet
-// The gold dataset writes into gold/by-timestamp/<runTimestamp>/. The pipeline then copies that folder to gold/latest/.
+// The gold dataset writes into gold/_staging/. The pipeline then copies the files to gold/by-timestamp/<run>/ and gold/latest/.
 SortDaily sink(allowSchemaDrift: true,
 	validateSchema: false,
 	partitionFileNames:['daily_energy_by_device.json'],

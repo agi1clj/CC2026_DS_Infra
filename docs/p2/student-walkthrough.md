@@ -10,8 +10,8 @@ P2 adds an ETL pipeline (extract, transform, load) to your P1 infrastructure. Yo
 upload CSV -> bronze/raw/ -> storage event -> Data Factory pipeline -> Mapping Data Flow
                                                   |                       |-> silver/energy_readings/ (clean Parquet)
                                                   |                       |-> silver/rejected/ (bad rows + reason)
-                                                  |                       '-> gold/by-timestamp/<run>/ (history)
-                                                  |-> reject-ratio check -> Copy -> gold/latest/
+                                                  |                       '-> gold/_staging/ (3 JSON files)
+                                                  |-> reject-ratio check -> Copy -> gold/by-timestamp/<run>/ + gold/latest/
                                                   '-> Logic App -> Teams card (SUCCEEDED / FAILED)
 ```
 
@@ -28,7 +28,7 @@ upload CSV -> bronze/raw/ -> storage event -> Data Factory pipeline -> Mapping D
 |---|---|---|
 | bronze | `bronze` | Raw upload. You never change it |
 | silver | `silver` | `energy_readings/`: clean, typed Parquet. `rejected/rejected_rows.csv`: removed bad rows with a `reject_reason` |
-| gold | `gold` | Small JSON files. Every run writes `by-timestamp/<yyyyMMddTHHmmssZ>/<file>.json` (history, never deleted). Then it copies them to `latest/`. The backend reads **only `gold/latest/`** |
+| gold | `gold` | Small JSON files. The data flow writes to `_staging/`. Each run that passes the checks copies the files to `by-timestamp/<yyyyMMddTHHmmssZ>/` (history, never deleted) and to `latest/`. The backend reads **only `gold/latest/`** |
 
 ### Medallion in one minute
 The same reading travels through three layers. Each layer answers one question.
@@ -138,7 +138,7 @@ Data Factory page (`terraform output data_factory_name`) → **Launch studio →
 2. **Pipeline runs**: status *In progress*, then *Succeeded*. Wait about 5 minutes for the Spark start. Do not upload again meanwhile.
 3. Click the run → **Activity runs**. Click the glasses icon of **Run data flow**: rows written per sink and duration. Expect 525,600 rows in `SilverParquet` and 5,185 in `RejectedCsv`. The **Notify** activities call the Logic App that sends the Teams card. They work without a webhook.
 
-The pipeline checks the data before it updates `gold/latest/`. If more than 10% of the rows that were rejected or kept are rejected (parameter `maxRejectRatio`, default `0.10`), the run fails. Silver, `silver/rejected/` and `gold/by-timestamp/` are already written then. Only `gold/latest/` stays unchanged.
+The pipeline checks the data before it updates `gold/latest/`. If more than 10% of the rows that were rejected or kept are rejected (parameter `maxRejectRatio`, default `0.10`), the run fails. Silver and `silver/rejected/` are already written then. `gold/by-timestamp/` and `gold/latest/` stay unchanged.
 
 **Never edit anything in Studio.** Terraform overwrites it. Keep **Data flow debug OFF**.
 
@@ -212,7 +212,7 @@ Open `terraform/modules/data-factory/dataflow/energy_etl.dfs` (`//` starts a com
 3. `AddRejectReason` and the sink `RejectedCsv`: the rejected rows with the reason go to `silver/rejected/`.
 4. `DropDuplicates` and `AddTypedColumns`: one row per `device_id` + `timestamp`, real types. The sink `SilverParquet` writes silver.
 5. The aggregates `DailyTotals` (sum per device and day) and `LocationTotals` (sum per location), and `AddGroup` + `NumberRows` (window) + `Latest200` (filter) for the newest readings.
-6. The three gold sinks (`GoldDaily`, `GoldLocation`, `GoldLatest`): one JSON file each. Then find the Copy and the reject-ratio check in `terraform/modules/data-factory/pipeline/energy_etl.json.tftpl`.
+6. The three gold sinks (`GoldDaily`, `GoldLocation`, `GoldLatest`): one JSON file each. Then find the two Copy activities and the reject-ratio check in `terraform/modules/data-factory/pipeline/energy_etl.json.tftpl`.
 
 You must be able to explain what bronze, silver and gold contain and why the backend reads only `gold/latest/`.
 
@@ -253,7 +253,7 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 | No Teams card (curl shows 202, or pipeline succeeded) | Power Automate → My flows → run history. Check `TEAMS_WEBHOOK_URL` and Portal → Logic App → *Runs history* |
 | Run *Failed* with a schema error on a good file | The CSV header differs from the six column names. Compare with `head -1 data/energy_readings.csv` |
 | Red card: `Too many rejected rows` | More than 10% of the rows were rejected. Read `silver/rejected/rejected_rows.csv`. Fix the file or the rules. `gold/latest/` was not changed |
-| `Copy to latest` fails with `403` | Data Factory role not active yet. Wait 5 minutes and upload again |
+| `Copy to history` or `Copy to latest` fails with `403` | Data Factory role not active yet. Wait 5 minutes and upload again |
 | `RequestDisallowedByAzure`, `RequestDisallowedByPolicy` or `LocationNotAvailableForResourceType` | Region policy of Azure for Students. Portal → Policy → Assignments → *Allowed resource deployment regions*. Pick an allowed region, set `AZURE_LOCATION`, re-run bootstrap. We did not check Data Factory and Logic App availability in each region. Not verified |
 | `... cores quota ... exceeded` or `Operation cannot be completed without additional quota` | Low vCore quota. Ask your instructor. Try later or use another region. Not verified |
 
