@@ -75,7 +75,7 @@ az login
 
 ## Step 3 — Get the dataset
 
-`data/energy_sample.csv` is a small sample (1 day). Download `energy_readings.csv` from the course channel (Teams, Files) and save it as `data/energy_readings.csv`. It has 532,895 rows and 32 MB. Git ignores it. Check it: `wc -l` must show 532896 (header included) and `head` the column names.
+Create the `data` folder (`mkdir -p data`). Download `energy_readings.csv` from the course channel (Teams, Files) and save it as `data/energy_readings.csv`. It has 532,895 rows and 32 MB. Git ignores it. Check it: `wc -l` must show 532896 (header included) and `head` the column names.
 
 ```bash
 wc -l data/energy_readings.csv && head -3 data/energy_readings.csv
@@ -217,12 +217,6 @@ git add -A && git commit -m "feat(p2): add the challenge brief and sample data"
 ```
 
 Then open `docs/p2/challenge.md` and follow it.
-
-## Limits
-- Every upload is a full refresh. Production appends or merges (for example with Delta or Iceberg).
-- The data flow has no unit tests. The AWS Python script has them.
-- A Spark data flow for a 32 MB file is a teaching choice. A small script would be faster and cheaper.
-- The webhook URL is stored in the Terraform state and in the Logic App definition. We accept this limit. This course has no Key Vault.
 
 ## Cost
 
