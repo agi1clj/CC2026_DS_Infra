@@ -21,5 +21,5 @@ bootstrap/bootstrap.env
 .idea/
 .vscode/
 
-# P2: the full dataset is generated locally (scripts/generate_dataset.py), never committed
+# P2: the full dataset (32 MB) comes from the course channel and is never committed
 data/energy_readings.csv

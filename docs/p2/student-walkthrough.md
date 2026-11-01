@@ -73,10 +73,10 @@ az login
 
 ## Step 3 — Get the dataset
 
-`data/` holds small test files: `energy_sample.csv` (1 day), `energy_invalid.csv` and `energy_too_dirty.csv` (both broken on purpose, Step 11). Generate the full file (about 530 000 rows, 32 MB):
+`data/` holds small test files: `energy_sample.csv` (1 day), `energy_invalid.csv` and `energy_too_dirty.csv` (both broken on purpose, Step 11). Download `energy_readings.csv` from the course channel (Teams, Files) and save it as `data/energy_readings.csv`. It has 532,895 rows and 32 MB. Git ignores it. Check it: `wc -l` must show 532896 (header included) and `head` the column names.
 
 ```bash
-python3 scripts/generate_dataset.py --out data
+wc -l data/energy_readings.csv && head -3 data/energy_readings.csv
 ```
 
 Columns: `device_id,timestamp,temperature,humidity,kwh,location`. About 1% of the rows are dirty. The split `CleanRows` in the data flow sends rows with `kwh` empty or negative, `humidity` outside 0 to 100 or `temperature` outside -40 to 60 (for example `-999`) to `silver/rejected/` with a `reject_reason`. It keeps the first row of a duplicate (`device_id` + `timestamp`). The pipeline counts the other duplicates and writes nothing.
