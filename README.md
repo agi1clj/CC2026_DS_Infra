@@ -38,12 +38,12 @@ More diagrams (conceptual, UML deployment, CI/CD): [docs/architecture.md](docs/a
 | Federated credentials | `github-apps-main(-ids)`, `github-infra-main(-ids)` | bootstrap | Trust GitHub OIDC tokens from `main` of each repo (name-based and ID-based subject) |
 | Resource group | `rg-cc2026-agi-dev` | Terraform | Everything below |
 | Container registry (Basic) | `acrcc2026agidev<4 hex>` | Terraform | Stores `backend` and `frontend` images |
-| User-assigned identity | `id-cc2026-agi-dev-webapps` | Terraform | Web Apps pull from ACR with it (AcrPull); reusable for P2 data access |
+| User-assigned identity | `id-cc2026-agi-dev-webapps` | Terraform | Web Apps pull from ACR with it (AcrPull); also reads the gold files in P2 (Storage Blob Data Reader) |
 | App Service Plan (Linux, B1) | `asp-cc2026-agi-dev` | Terraform | One shared VM for both apps |
 | Linux Web App (container) | `cc2026-api-agi-dev-<4 hex>` | Terraform | Backend, port 8000 |
 | Linux Web App (container) | `cc2026-ui-agi-dev-<4 hex>` | Terraform | Frontend, port 8080 |
 | Storage account (ADLS Gen2) + containers `bronze`, `silver`, `gold` | `stcc2026agidev<4 hex>` | Terraform | P2 data lake. LRS, TLS 1.2, no shared keys, no public access, blob and container soft delete (7 days) |
-| Data Factory (system-assigned identity, live mode) | `adf-cc2026-agi-dev-<4 hex>` | Terraform | P2 pipeline `pl-energy-etl`, data flow, blob event trigger |
+| Data Factory (system-assigned identity, live mode) | `adf-cc2026-agi-dev-<4 hex>` | Terraform | P2 pipeline `pl-energy-etl`: data flow, reject-ratio check, copy to `gold/latest/`, blob event trigger |
 | Logic App (Consumption) | `logic-cc2026-agi-dev-notify` | Terraform | P2: turns the pipeline status into a Teams card |
 
 The hex suffixes come from a hash of the subscription ID and your initials. They are deterministic: every run, local or CI, produces the same names. They keep globally unique names (ACR, Web Apps, Storage) from colliding between students with the same initials.
@@ -322,7 +322,7 @@ If step 1 fails, the script stops and never touches the state. GitHub variables 
 | App Service Plan B1 (Linux) | **per hour while the plan exists**, even with zero traffic or stopped apps | The main cost (≈ €12/month). Delete it (`cleanup.sh`) after the final evaluation |
 | ACR Basic | fixed daily rate + storage | Small but continuous |
 | Storage account (state) | per GB + transactions | Negligible (a few KB) |
-| Data lake storage + Data Factory + Logic App (P2) | per GB, per run, per action | Cents per month when idle. A data flow run (General Purpose, 8 cores) costs about €0.3 |
+| Data lake storage + Data Factory + Logic App (P2) | per GB, per run, per action | Cents per month when idle. A data flow run (General Purpose, 8 cores) costs about 0.17 USD |
 | Managed identities, role assignments | free | – |
 
 Prices in this table are approximate retail prices (germanywestcentral, October 2026); check the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) for your region. The setup costs about €16 per month; the Azure for Students credit covers it until the final evaluation.
