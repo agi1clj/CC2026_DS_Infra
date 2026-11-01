@@ -80,6 +80,8 @@ jobs:
       TF_VAR_app_service_sku: ${{ vars.APP_SERVICE_SKU }}
       TF_VAR_acr_sku: ${{ vars.ACR_SKU }}
       TF_VAR_create_web_apps: ${{ vars.CREATE_WEB_APPS || 'true' }}
+      # P2: Teams webhook URL is a secret. Empty (not set) = notifications are skipped.
+      TF_VAR_teams_webhook_url: ${{ secrets.TEAMS_WEBHOOK_URL }}
       TF_IN_AUTOMATION: "true"
     steps:
       - uses: actions/checkout@v7
