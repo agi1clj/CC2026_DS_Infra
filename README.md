@@ -43,8 +43,8 @@ More diagrams (conceptual, UML deployment, CI/CD): [docs/architecture.md](docs/a
 | App Service Plan (Linux, B1) | `asp-cc2026-agi-dev` | Terraform | One shared VM for both apps |
 | Linux Web App (container) | `cc2026-api-agi-dev-<4 hex>` | Terraform | Backend, port 8000 |
 | Linux Web App (container) | `cc2026-ui-agi-dev-<4 hex>` | Terraform | Frontend, port 8080 |
-| Storage account (ADLS Gen2) + containers `bronze`, `silver`, `gold` | `stcc2026agidev<4 hex>` | Terraform | P2 data lake. LRS, TLS 1.2, no shared keys, no public access, blob and container soft delete (7 days) |
-| Data Factory (system-assigned identity, live mode) | `adf-cc2026-agi-dev-<4 hex>` | Terraform | P2 pipeline `pl-energy-etl`: data flow, copy to `gold/latest/`, blob event trigger |
+| Storage account (ADLS Gen2) + containers `bronze`, `silver`, `gold` | `stcc2026agidev<4 hex>` | Terraform | P2 data lake: bronze (raw), silver (clean + `rejected/`), gold (JSON). LRS, TLS 1.2, no shared keys, no public access, soft delete 7 days |
+| Data Factory (system-assigned identity, live mode) | `adf-cc2026-agi-dev-<4 hex>` | Terraform | P2 pipeline `pl-energy-etl`: data flow, copy to `gold/by-timestamp/<run>/` and `gold/latest/`, blob event trigger |
 | Logic App (Consumption) | `logic-cc2026-agi-dev-notify` | Terraform | P2: turns the pipeline status into a Teams card |
 
 The hex suffixes come from a hash of the subscription ID and your initials. They are deterministic: every run, local or CI, produces the same names. They keep globally unique names (ACR, Web Apps, Storage) from colliding between students with the same initials.
@@ -334,9 +334,9 @@ Stopping a Web App or turning off Always On on B1 saves nothing: B1 is billed pe
 
 ## 16. Extending (P2/P3)
 
-P2 (data pipeline: bronze/silver/gold in Blob Storage, Data Factory, Teams notification) is implemented. Start with [docs/p2/student-walkthrough.md](docs/p2/student-walkthrough.md). Data Factory is owned by Terraform (live mode, no Git integration): the data flow script is `terraform/modules/data-factory/dataflow/energy_etl.dfs`. Never edit it in the portal.
+P2 (data pipeline: bronze, silver and gold in Blob Storage, Data Factory, Teams notification) is implemented. Start with [docs/p2/student-walkthrough.md](docs/p2/student-walkthrough.md). The diagram is in [docs/architecture.md](docs/architecture.md). Data Factory is owned by Terraform (live mode, no Git integration): the data flow script is `terraform/modules/data-factory/dataflow/energy_etl.dfs`. Never edit it in the portal.
 
-**Provided vs student work.** Provided: storage, Data Factory, trigger, pipeline, Teams notification, roles, the silver Parquet output, the rejected-rows CSV (`silver/rejected/`, with a reason) and all three gold files. Students deploy, run and explain the pipeline. The student work of P2 is in the Apps repository (backend reads `gold/latest/`, frontend charts). Optional bonus: one more gold file and one more cleaning rule.
+**Provided vs student work.** Provided: the whole pipeline, the silver Parquet output, `silver/rejected/` (bad rows with a reason) and the three gold files. Students deploy, run and explain it. The student work of P2 is in the Apps repository (the backend reads `gold/latest/`, the frontend shows charts). Optional bonus: one more gold file.
 
 Modules, app settings, identity outputs, the RBAC allow-list and the backend data source are extension points for P3. See [docs/extending.md](docs/extending.md).
 
