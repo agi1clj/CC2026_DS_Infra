@@ -26,7 +26,7 @@ BronzeCsv split(isNull(kwh) || kwh < 0 || isNull(humidity) || humidity < 0 || hu
 // 2b. DERIVE: write the reason into a new column. iif(test, a, b) is "if test then a else b".
 CleanRows@rejectedRows derive(reject_reason = iif(isNull(kwh), 'kwh empty', iif(kwh < 0, 'kwh negative', iif(isNull(humidity) || humidity < 0 || humidity > 100, 'humidity missing or outside 0..100', 'temperature missing or outside -40..60')))) ~> AddRejectReason
 // 3. AGGREGATE as DISTINCT: one row per (device_id, timestamp). first($$) keeps the first value of every other column.
-//    Duplicates are removed and counted by the pipeline (rows read - silver - rejected). They are not written anywhere.
+//    Duplicates are removed. They are not written anywhere and not counted.
 CleanRows@validRows aggregate(groupBy(device_id, timestamp),
 	each(match(name != 'device_id' && name != 'timestamp'), $$ = first($$))) ~> DropDuplicates
 // 4. DERIVE: add typed columns. event_time = real timestamp; date = first 10 characters of the text (YYYY-MM-DD).

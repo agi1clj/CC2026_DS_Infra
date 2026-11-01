@@ -19,11 +19,11 @@ locals {
   # Pipeline activities whose failure sends the red Teams card.
   failed_activities = ["Run data flow", "Check reject ratio", "Copy to latest"]
 
-  # Row counts from the data flow metrics. A sink that wrote zero rows has no entry, hence the contains().
+  # Row counts from the data flow metrics (rowsWritten per sink). A sink that wrote zero rows has no entry, hence the contains().
+  # The metric `sources` is empty for most sinks, so it is not used.
   flow_metrics  = "activity('Run data flow').output.runStatus.metrics"
   rows_silver   = "if(contains(${local.flow_metrics}, 'SilverParquet'), ${local.flow_metrics}.SilverParquet.rowsWritten, 0)"
   rows_rejected = "if(contains(${local.flow_metrics}, 'RejectedCsv'), ${local.flow_metrics}.RejectedCsv.rowsWritten, 0)"
-  rows_read     = "if(contains(${local.flow_metrics}, 'SilverParquet'), ${local.flow_metrics}.SilverParquet.sources.BronzeCsv.rowsRead, if(contains(${local.flow_metrics}, 'RejectedCsv'), ${local.flow_metrics}.RejectedCsv.sources.BronzeCsv.rowsRead, 0))"
 
   # Link to the run in the ADF monitor, built by the Web activities (the run ID is appended).
   monitor_url_prefix = "https://adf.azure.com/en/monitoring/pipelineruns/"
@@ -226,7 +226,7 @@ resource "azurerm_data_factory_pipeline" "energy_etl" {
 
   parameters = {
     fileName       = "energy_readings.csv"
-    maxRejectRatio = "0.10" # the run fails when more than 10% of the rows read are rejected
+    maxRejectRatio = "0.10" # the run fails when more than 10% of the rejected + silver rows are rejected
   }
 
   variables = {
@@ -241,7 +241,6 @@ resource "azurerm_data_factory_pipeline" "energy_etl" {
     gold_run_dataset    = azurerm_data_factory_custom_dataset.gold_run_files.name
     gold_latest_dataset = azurerm_data_factory_custom_dataset.gold_latest.name
     failed_activities   = local.failed_activities
-    rows_read           = local.rows_read
     rows_silver         = local.rows_silver
     rows_rejected       = local.rows_rejected
     notification_url    = var.notification_url

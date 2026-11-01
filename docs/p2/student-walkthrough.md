@@ -136,9 +136,9 @@ Data Factory page (`terraform output data_factory_name`) → **Launch studio →
 
 1. **Trigger runs**: the storage event trigger fired for your upload.
 2. **Pipeline runs**: status *In progress*, then *Succeeded*. Wait about 5 minutes for the Spark start. Do not upload again meanwhile.
-3. Click the run → **Activity runs**. Click the glasses icon of **Run data flow**: rows read, rows written per sink and duration. Expect 532,895 rows read and 525,600 in silver. The **Notify** activities call the Logic App that sends the Teams card. They work without a webhook.
+3. Click the run → **Activity runs**. Click the glasses icon of **Run data flow**: rows written per sink and duration. Expect 525,600 rows in `SilverParquet` and 5,185 in `RejectedCsv`. The **Notify** activities call the Logic App that sends the Teams card. They work without a webhook.
 
-The pipeline checks the data before it updates `gold/latest/`. If more than 10% of the rows read are rejected (parameter `maxRejectRatio`, default `0.10`), the run fails. Silver, `silver/rejected/` and `gold/by-timestamp/` are already written then. Only `gold/latest/` stays unchanged.
+The pipeline checks the data before it updates `gold/latest/`. If more than 10% of the rows that were rejected or kept are rejected (parameter `maxRejectRatio`, default `0.10`), the run fails. Silver, `silver/rejected/` and `gold/by-timestamp/` are already written then. Only `gold/latest/` stays unchanged.
 
 **Never edit anything in Studio.** Terraform overwrites it. Keep **Data flow debug OFF**.
 
@@ -191,7 +191,7 @@ The URL is a **secret**. Store it like this:
    ```
 2. **`terraform/environments/dev/teams.auto.tfvars` (ignored by Git).** Only needed when you run `terraform apply` on your own machine. Content: `teams_webhook_url = "<webhook-url>"`. Do not use `terraform.tfvars`: bootstrap rewrites it.
 3. Never commit the URL. Never paste it in chat or in a README.
-4. Run the manual **terraform** workflow again with **apply** ticked, so the Logic App gets the URL. Then upload the full file again (Step 6). This repeat run shows that uploads are **safe to repeat**: silver is overwritten, a new `gold/by-timestamp/` folder appears and `gold/latest/` shows the newest run. Teams shows **CC2026 P2 pipeline SUCCEEDED** with file name, run ID, a run link and the counts: rows read, silver, rejected and duplicates removed.
+4. Run the manual **terraform** workflow again with **apply** ticked, so the Logic App gets the URL. Then upload the full file again (Step 6). This repeat run shows that uploads are **safe to repeat**: silver is overwritten, a new `gold/by-timestamp/` folder appears and `gold/latest/` shows the newest run. Teams shows **CC2026 P2 pipeline SUCCEEDED** with file name, run ID, a run link and the counts of silver and rejected rows.
 
 ## Step 11 — Make runs fail on purpose
 

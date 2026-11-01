@@ -64,7 +64,7 @@
     ],
     "typeProperties": {
       "expression": {
-        "value": "@greater(div(float(${rows_rejected}), float(max(1, ${rows_read}))), float(pipeline().parameters.maxRejectRatio))",
+        "value": "@greater(div(float(${rows_rejected}), float(max(1, add(${rows_rejected}, ${rows_silver})))), float(pipeline().parameters.maxRejectRatio))",
         "type": "Expression"
       },
       "ifTrueActivities": [
@@ -74,7 +74,7 @@
           "dependsOn": [],
           "typeProperties": {
             "message": {
-              "value": "@concat('Too many rejected rows: ', string(${rows_rejected}), ' of ', string(${rows_read}), ' (limit ', pipeline().parameters.maxRejectRatio, '). Silver and gold/by-timestamp are written, gold/latest is NOT updated.')",
+              "value": "@concat('Too many rejected rows: ', string(${rows_rejected}), ' of ', string(add(${rows_rejected}, ${rows_silver})), ' rows (limit ', pipeline().parameters.maxRejectRatio, '). Silver and gold/by-timestamp are written, gold/latest is NOT updated.')",
               "type": "Expression"
             },
             "errorCode": "RejectRatioTooHigh"
@@ -163,7 +163,7 @@
         "pipeline": "@{pipeline().Pipeline}",
         "runId": "@{pipeline().RunId}",
         "file": "@{pipeline().parameters.fileName}",
-        "message": "Rows read: @{${rows_read}}. Silver: @{${rows_silver}}. Rejected: @{${rows_rejected}}. Duplicates removed: @{sub(${rows_read}, add(${rows_silver}, ${rows_rejected}))}. Gold history: gold/by-timestamp/@{variables('runTimestamp')}/. Gold latest updated: gold/latest/.",
+        "message": "Silver rows: @{${rows_silver}}. Rejected rows: @{${rows_rejected}}. Gold history: gold/by-timestamp/@{variables('runTimestamp')}/. Gold latest updated: gold/latest/.",
         "monitorUrl": "${monitor_url_prefix}@{pipeline().RunId}?factory=${factory_id_encoded}"
       }
     }
