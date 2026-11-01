@@ -1,6 +1,6 @@
 # P2 — Data Pipeline Walkthrough (Azure)
 
-P2 adds an ETL pipeline (extract, transform, load) to your P1 infrastructure. You upload a CSV file with energy readings. Azure cleans it and writes the results. Teams tells you if it worked.
+P2 adds an ETL pipeline (extract, transform, load) to your P1 infrastructure. You upload a CSV file with energy readings. Azure cleans it and writes the results. Teams tells you if it worked. Teams is optional: the pipeline works without a webhook.
 
 ```text
 upload CSV -> bronze/raw/ -> storage event -> Data Factory pipeline -> Mapping Data Flow
@@ -37,9 +37,9 @@ The same reading travels through three layers. Each layer answers one question.
 | Gold files `energy_by_location.json` and `latest_readings.json` | **You build them** (Lab 2) |
 | A third gold file of your own and an extra data-quality rule | Optional bonus |
 
-**Lab 1** (Steps 1 to 11): deploy, upload the CSV, see the green card, then the red card. **Lab 2** (Steps 12 to 15): write the two gold files. **Next** (Step 16): the Apps challenge. Use the P1 placeholders. Time: about 60 minutes. **Do not edit the Data Factory portal.** It is for watching only. Terraform overwrites portal edits.
+**Lab 1** (Steps 1 to 11): deploy, upload the CSV, add Teams, see the green and red cards. **Lab 2** (Steps 12 to 15): write the two gold files. **Next** (Step 16): the Apps challenge. Use the P1 placeholders. Time: about 60 minutes. **Do not edit the Data Factory portal.** It is for watching only. Terraform overwrites portal edits.
 
-# Lab 1 — Deploy and run the pipeline
+# Lab 1 — Deploy, run, add Teams, break it
 
 ## Step 1 — Get the P2 code into your Infra repository
 
@@ -64,47 +64,17 @@ az login
 ./bootstrap/bootstrap.sh
 ```
 
-## Step 3 — Create the Teams webhook
+## Step 3 — Get the dataset
 
-The old "Incoming Webhook" connector is retired. Use a **Workflow** (Power Automate).
-
-1. In Teams, open a channel (a private channel in your own team is fine). Click **More options (…) → Workflows**.
-2. Pick **Send webhook alerts to a channel**. Some tenants show it as **Post to a channel when a webhook request is received**. Name it `cc2026-p2`. Select team and channel. Click **Add workflow**.
-3. Copy the **webhook URL**. Find it later in **Power Automate → My flows → your flow → trigger**.
-
-No template? Build a blank flow. Trigger: **When a Teams webhook request is received** (*Anyone*). Action: **Post card in a chat or channel** (as *Flow bot*, Adaptive Card = `triggerBody()?['attachments']?[0]?['content']`).
-
-Test the URL. A card "hello from CC2026" must appear. `202 Accepted` means Power Automate got the request.
-
-```bash
-curl -i -X POST -H "Content-Type: application/json" \
-  -d '{"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","content":{"type":"AdaptiveCard","version":"1.4","$schema":"http://adaptivecards.io/schemas/adaptive-card.json","body":[{"type":"TextBlock","text":"hello from CC2026"}]}}]}' \
-  "<webhook-url>"
-```
-
-The URL is a **secret**. Never commit it. Store it twice:
-
-```bash
-gh secret set TEAMS_WEBHOOK_URL --repo <github-user>/CC2026_<LastName>_<FirstName>_Infra   # paste the URL
-echo 'teams_webhook_url = "<webhook-url>"' > terraform/environments/dev/teams.auto.tfvars   # git-ignored
-```
-
-Use `teams.auto.tfvars`, not `terraform.tfvars`. Bootstrap rewrites `terraform.tfvars` on every run and never touches `teams.auto.tfvars`. Your tenant may block Workflows: ask your instructor or use a personal account. Without a URL the pipeline works but sends no card.
-
-## Step 4 — Get the dataset
-
-`data/` holds `energy_sample.csv` (1 day) and `energy_invalid.csv` (broken on purpose). Generate the full file (about 530 000 rows, 32 MB):
+`data/` holds three small test files: `energy_sample.csv` (1 day), `energy_invalid.csv` and `energy_too_dirty.csv` (both broken on purpose, Step 11). Generate the full file (about 530 000 rows, 32 MB):
 
 ```bash
 python3 scripts/generate_dataset.py --out data
-head -3 data/energy_readings.csv
 ```
 
-Columns: `device_id,timestamp,temperature,humidity,kwh,location`. About 1% of the rows are dirty:
+Columns: `device_id,timestamp,temperature,humidity,kwh,location`. About 1% of the rows are dirty. The data flow writes rows with `kwh` empty or negative, `humidity` outside 0 to 100 or `temperature` outside -40 to 60 (for example `-999`) to `silver/rejected/` with a `reject_reason`. It keeps the first row of a duplicate (`device_id` + `timestamp`). The pipeline counts the other duplicates and writes nothing.
 
-The data flow writes rows with `kwh` empty or negative, `humidity` outside 0 to 100 or `temperature` outside -40 to 60 (for example `-999`) to `silver/rejected/` with a `reject_reason`. It keeps the first row of a duplicate (`device_id` + `timestamp`). The pipeline counts the other duplicates and writes nothing.
-
-## Step 5 — Deploy with the terraform workflow
+## Step 4 — Deploy with the terraform workflow
 
 Run `git push origin HEAD:main`. Open *Actions → terraform → Run workflow*. Untick **apply** to read the plan. Then run it with **apply** ticked. The plan adds storage, Data Factory, the Logic App and roles.
 
@@ -118,13 +88,13 @@ terraform output
 cd ../../..
 ```
 
-## Step 6 — Give yourself access to the data
+## Step 5 — Give yourself access to the data
 
-Shared keys are off. Your login needs a data role. Use the **same terminal** for Steps 6 to 14 (`$STORAGE` is a shell variable).
+Shared keys are off. Your login needs a data role (it takes 2–5 minutes to work). Use the **same terminal** for Steps 5 to 14 (`$STORAGE` is a shell variable).
 
 ```bash
 cd terraform/environments/dev
-terraform init -backend-config=backend.hcl   # skip if you did Step 5 locally
+terraform init -backend-config=backend.hcl   # skip if you did Step 4 locally
 STORAGE=$(terraform output -raw storage_account_name)
 cd ../../..
 az role assignment create \
@@ -133,9 +103,7 @@ az role assignment create \
   --scope "$(az storage account show --name "$STORAGE" --query id -o tsv)"
 ```
 
-Wait 2–5 minutes.
-
-## Step 7 — Upload the dataset and start the pipeline
+## Step 6 — Upload the full file and start the pipeline
 
 ```bash
 az storage blob upload --auth-mode login --account-name "$STORAGE" \
@@ -143,11 +111,11 @@ az storage blob upload --auth-mode login --account-name "$STORAGE" \
   --file data/energy_readings.csv --overwrite
 ```
 
-## Step 8 — Watch the run in Data Factory
+## Step 7 — Watch the run in Data Factory
 
-Portal → Data Factory (`terraform output data_factory_name`) → **Launch studio → Monitor → Pipeline runs**. Expect *In progress*, then *Succeeded*. The first run needs about 5 minutes (Spark cold start). Do not start a second run. The pipeline checks the data before it updates `gold/latest/`. If more than 10% of the rows read are rejected (parameter `maxRejectRatio`, default `0.10`), the run fails with a red card. Silver, `silver/rejected/` and `gold/by-timestamp/` are already written at that point. Only `gold/latest/` stays unchanged.
+Portal → Data Factory (`terraform output data_factory_name`) → **Launch studio → Monitor → Pipeline runs**. Expect *In progress*, then *Succeeded*. The first run needs about 5 minutes (Spark cold start). Do not start a second run. The pipeline checks the data before it updates `gold/latest/`. If more than 10% of the rows read are rejected (parameter `maxRejectRatio`, default `0.10`), the run fails. Silver, `silver/rejected/` and `gold/by-timestamp/` are already written then. Only `gold/latest/` stays unchanged.
 
-## Step 9 — Check silver and gold
+## Step 8 — Check silver, rejected rows and gold
 
 ```bash
 for c in silver/energy_readings/ silver/rejected/ gold/by-timestamp/ gold/latest/; do
@@ -159,23 +127,54 @@ az storage blob download --auth-mode login --account-name "$STORAGE" --container
 
 `silver/rejected/rejected_rows.csv` ends with the column `reject_reason`. `by-timestamp/` has one folder per run, like `20261101T093000Z/`. `latest/` copies the newest run. The full dataset gives 1825 records in `daily_energy_by_device.json`.
 
-## Step 10 — See the SUCCEEDED card in Teams
+## Step 9 — Create the Teams webhook
 
-Teams shows **CC2026 P2 pipeline SUCCEEDED** with file name, run ID, a run link and the counts: rows read, silver, rejected and duplicates removed.
+The old "Incoming Webhook" connector is retired. Use a **Workflow** (Power Automate).
 
-## Step 11 — Make a run fail on purpose
+1. In Teams, open a standard channel in a team you own, for example General. Private channels may not work with Workflows. No team? Create one: **Teams → Join or create a team**. Click **More options (…) → Workflows**.
+2. Pick **Send webhook alerts to a channel**. Name it `cc2026-p2`. Select team and channel. Click **Add workflow**.
+3. Copy the **webhook URL**. Find it later in **Power Automate → My flows → your flow → trigger**.
 
-`energy_invalid.csv` has no `kwh` column. The data flow checks the source schema and stops.
+No template? Build a blank flow: trigger **When a Teams webhook request is received** (*Anyone*), action **Post card in a chat or channel** (Adaptive Card = `triggerBody()?['attachments']?[0]?['content']`).
+
+Test the URL. A card "hello from CC2026" must appear. `202 Accepted` means Power Automate got the request.
+
+```bash
+curl -i -X POST -H "Content-Type: application/json" \
+  -d '{"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","content":{"type":"AdaptiveCard","version":"1.4","$schema":"http://adaptivecards.io/schemas/adaptive-card.json","body":[{"type":"TextBlock","text":"hello from CC2026"}]}}]}' \
+  "<webhook-url>"
+```
+
+Your tenant may block Workflows: ask your instructor or use a personal account.
+
+## Step 10 — Add Teams to the pipeline and repeat the run
+
+The URL is a **secret**. Never commit it. Store it twice:
+
+```bash
+gh secret set TEAMS_WEBHOOK_URL --repo <github-user>/CC2026_<LastName>_<FirstName>_Infra   # paste the URL
+echo 'teams_webhook_url = "<webhook-url>"' > terraform/environments/dev/teams.auto.tfvars   # git-ignored
+```
+
+Use `teams.auto.tfvars`, not `terraform.tfvars`: bootstrap rewrites `terraform.tfvars` on every run and never touches `teams.auto.tfvars`. Run the **terraform** workflow again with **apply** ticked. Then upload the full file again (Step 6). This repeat run shows that uploads are **safe to repeat**: silver is overwritten, a new `gold/by-timestamp/` folder appears and `gold/latest/` shows the newest run. Runs queue one at a time. Teams shows **CC2026 P2 pipeline SUCCEEDED** with file name, run ID, a run link and the counts: rows read, silver, rejected and duplicates removed.
+
+## Step 11 — Make runs fail on purpose
+
+Each upload is one run (about €0.3). Wait for the Teams card before the next upload.
 
 ```bash
 az storage blob upload --auth-mode login --account-name "$STORAGE" \
-  --container-name bronze --name raw/energy_invalid.csv \
-  --file data/energy_invalid.csv --overwrite
+  --container-name bronze --name raw/energy_invalid.csv --file data/energy_invalid.csv --overwrite
 ```
 
-Monitor shows *Failed*. Teams shows **CC2026 P2 pipeline FAILED** with the error. Silver and gold keep the last good run.
+`energy_invalid.csv` has no `kwh` column. The data flow checks the source schema and stops. Monitor shows *Failed*. Teams shows a red **FAILED** card with the error.
 
-**Safe to repeat.** The same file 3 times: safe. Silver is overwritten, each run adds a `gold/by-timestamp/` folder, `gold/latest/` shows the newest run, runs queue one at a time, you get 3 cards. A different or small file replaces silver and `gold/latest/`: upload `energy_readings.csv` again to restore. Wait for the Teams card before the next upload.
+```bash
+az storage blob upload --auth-mode login --account-name "$STORAGE" \
+  --container-name bronze --name raw/energy_too_dirty.csv --file data/energy_too_dirty.csv --overwrite
+```
+
+In `energy_too_dirty.csv` half of the `kwh` values are empty. The data flow succeeds, but more than 10% of the rows are rejected. The reject-ratio check fails and Teams shows **Too many rejected rows**. `gold/latest/` is unchanged. A different or small file that passes the check replaces silver and `gold/latest/`: upload `energy_readings.csv` again to restore the normal state.
 
 # Lab 2 — Write the two gold files
 
@@ -237,23 +236,24 @@ LocationColumns sink(allowSchemaDrift: true, validateSchema: false, partitionFil
 4. Paste them into `terraform/modules/data-factory/dataflow/energy_etl.dfs`.
 5. In `terraform/modules/data-factory/main.tf`, add the new stream names to `local.transformations`. Add `GoldLocation` and `GoldLatest` to `local.gold_sinks`.
 6. Commit (`feat(data-factory): add gold files by location and latest readings`) and push to `main`. Run the **terraform** workflow with **apply** ticked.
-7. Upload `energy_readings.csv` again (Step 7). After the green card, your files are in `gold/latest/`.
+7. Upload `energy_readings.csv` again (Step 6). After the green card, your files are in `gold/latest/`.
 
 ## Step 14 — Check your result
 
-Compare with the expected files (set `APPS_REPO` to your Apps repository folder):
+Compare with the expected files (set `APPS_REPO` to your Apps repository folder). The loop prints the record count and the sum of the first numeric column of each file:
 
 ```bash
 APPS_REPO=../CC2026_<LastName>_<FirstName>_Apps
-mkdir -p out
 for f in energy_by_location latest_readings; do
   az storage blob download --auth-mode login --account-name "$STORAGE" \
-    --container-name gold --name "latest/$f.json" --file "out/$f.json" --overwrite
-  diff <(jq -S -s 'flatten' "out/$f.json") <(jq -S -s 'flatten' "$APPS_REPO/docs/p2/sample-data/gold/latest/$f.json") && echo "$f OK"
+    --container-name gold --name "latest/$f.json" --file "/tmp/$f.json" --overwrite
+  for file in "/tmp/$f.json" "$APPS_REPO/docs/p2/sample-data/gold/latest/$f.json"; do
+    jq -s 'flatten | {records: length, kwh: (map(.kwh // .total_kwh) | add)}' "$file"
+  done
 done
 ```
 
-`... OK` means equal. A difference in the last decimal means a missing rounding step.
+Rounding can differ in the last digit on Azure. Accept a difference up to 0.01 in a number. Do not expect identical files. Open both files to compare single records.
 
 ## Step 15 — Change a cleaning rule (and optional bonus)
 
@@ -291,7 +291,7 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 |---|---|
 | `MissingSubscriptionRegistration` or `SubscriptionNotRegistered` for `Microsoft.EventGrid`, `Microsoft.DataFactory` or `Microsoft.Logic` | Re-run `bootstrap.sh`, or run `az provider register --namespace Microsoft.EventGrid --wait` |
 | Upload works, no pipeline run | Upload to `raw/<name>.csv` in container `bronze`. Check *Manage → Triggers*: status *Started*. Wait 1–2 minutes |
-| `403 AuthorizationPermissionMismatch` | Do Step 6. Wait 5 minutes. Use `--auth-mode login`, never `--account-key` |
+| `403 AuthorizationPermissionMismatch` | Do Step 5. Wait 5 minutes. Use `--auth-mode login`, never `--account-key` |
 | No Teams card (curl shows 202, or pipeline succeeded) | Power Automate → My flows → run history. Check `TEAMS_WEBHOOK_URL` and Portal → Logic App → *Runs history* |
 | Run *Failed* with a schema error on a good file | The CSV header differs from the six column names. Compare with `head -1 data/energy_readings.csv` |
 | Red card: `Too many rejected rows` | More than 10% of the rows were rejected. Read `silver/rejected/rejected_rows.csv`. Fix the file or the rules. `gold/latest/` was not changed |
