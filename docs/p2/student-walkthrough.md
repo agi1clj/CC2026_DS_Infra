@@ -235,11 +235,10 @@ Then open `docs/p2/challenge.md` and follow it.
 
 ## Cost
 
-One data flow run costs about €0.3. Ten test runs cost about €3 on top of P1. Idle resources cost cents.
-
-- Each upload starts one run. **Wait for the run to end before the next upload.**
-- **The expensive trap is the Data Factory Studio debug session.** It keeps a Spark cluster running for the whole session (default time to live: 60 minutes, about €2 per hour). Switch *Data flow debug* on only when you test. Set the debug **time to live to 15 minutes**. Switch it off when you finish. Check **Monitor** and **Cost Management → Cost analysis** after each lab.
-- **Delete nothing until the final evaluation.** P3 and the final project use the same infrastructure.
+**Budget.** Azure for Students gives about 80 USD until January. P1 costs about 17 USD per month (about 51 USD for three months). P2 must stay under about 4 USD.
+- One data flow run bills about 0.6 core-hours, about 0.17 USD (measured in a real run; the core-hour price is an approximate figure). Keep it to about 15 runs. Storage, Logic App, Event Grid and pipeline runs cost cents.
+- **The expensive mistake is a Data Factory Studio debug session left on** (about 2 USD per hour, default time to live 60 minutes). Switch *Data flow debug* on only when you test, set the time to live to 15 minutes, switch it off when you finish.
+- Guardrails: (1) Portal → **Cost Management + Billing → Budgets → Create**: amount 60, alerts at 80% and 100%, your email. (2) Wait for the green or red card before the next upload. (3) Never delete the P1 resources: P3 needs them.
 
 ## Troubleshooting
 
@@ -255,7 +254,7 @@ Rows marked "Not verified" come from documentation, not from a tested run.
 | Red card: `Too many rejected rows` | More than 10% of the rows were rejected. Read `silver/rejected/rejected_rows.csv`. Fix the file or the rules. `gold/latest/` was not changed |
 | `Copy to history` or `Copy to latest` fails with `403` | Data Factory role not active yet. Wait 5 minutes and upload again |
 | `RequestDisallowedByAzure`, `RequestDisallowedByPolicy` or `LocationNotAvailableForResourceType` | Region policy of Azure for Students. Portal → Policy → Assignments → *Allowed resource deployment regions*. Pick an allowed region, set `AZURE_LOCATION`, re-run bootstrap. We did not check Data Factory and Logic App availability in each region. Not verified |
-| `... cores quota ... exceeded` or `Operation cannot be completed without additional quota` | Low vCore quota. Ask your instructor. Try later or use another region. Not verified |
+| Data flow fails to start with a core quota error (`... cores quota ... exceeded`) | The subscription has no compute quota for the data flow in this region. Request quota (Portal → Help + support → Service and subscription limits) or try another allowed region. Not verified on a student subscription |
 
 ## Bonus (optional)
 
