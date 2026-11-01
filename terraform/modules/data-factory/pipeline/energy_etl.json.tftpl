@@ -54,11 +54,41 @@
     }
   },
   {
+    "name": "Check reject ratio",
+    "type": "IfCondition",
+    "dependsOn": [
+      {
+        "activity": "Run data flow",
+        "dependencyConditions": ["Succeeded"]
+      }
+    ],
+    "typeProperties": {
+      "expression": {
+        "value": "@greater(div(float(${rows_rejected}), float(max(1, ${rows_read}))), float(pipeline().parameters.maxRejectRatio))",
+        "type": "Expression"
+      },
+      "ifTrueActivities": [
+        {
+          "name": "Too many rejected rows",
+          "type": "Fail",
+          "dependsOn": [],
+          "typeProperties": {
+            "message": {
+              "value": "@concat('Too many rejected rows: ', string(${rows_rejected}), ' of ', string(${rows_read}), ' (limit ', pipeline().parameters.maxRejectRatio, '). Silver and gold/by-timestamp are written, gold/latest is NOT updated.')",
+              "type": "Expression"
+            },
+            "errorCode": "RejectRatioTooHigh"
+          }
+        }
+      ]
+    }
+  },
+  {
     "name": "Copy to latest",
     "type": "Copy",
     "dependsOn": [
       {
-        "activity": "Run data flow",
+        "activity": "Check reject ratio",
         "dependencyConditions": ["Succeeded"]
       }
     ],
@@ -103,7 +133,7 @@
     ],
     "outputs": [
       {
-        "referenceName": "${gold_latest_set}",
+        "referenceName": "${gold_latest_dataset}",
         "type": "DatasetReference"
       }
     ]
@@ -133,17 +163,17 @@
         "pipeline": "@{pipeline().Pipeline}",
         "runId": "@{pipeline().RunId}",
         "file": "@{pipeline().parameters.fileName}",
-        "message": "Silver rows written: @{activity('Run data flow').output.runStatus.metrics.SilverParquet.rowsWritten}. Gold history: gold/by-timestamp/@{variables('runTimestamp')}/. Gold latest updated: gold/latest/.",
+        "message": "Rows read: @{${rows_read}}. Silver: @{${rows_silver}}. Rejected: @{${rows_rejected}}. Duplicates removed: @{sub(${rows_read}, add(${rows_silver}, ${rows_rejected}))}. Gold history: gold/by-timestamp/@{variables('runTimestamp')}/. Gold latest updated: gold/latest/.",
         "monitorUrl": "${monitor_url_prefix}@{pipeline().RunId}?factory=${factory_id_encoded}"
       }
     }
-  },
+  }%{ for activity in failed_activities ~},
   {
-    "name": "Notify failed",
+    "name": "Notify failed (${activity})",
     "type": "WebActivity",
     "dependsOn": [
       {
-        "activity": "Run data flow",
+        "activity": "${activity}",
         "dependencyConditions": ["Failed"]
       }
     ],
@@ -163,39 +193,9 @@
         "pipeline": "@{pipeline().Pipeline}",
         "runId": "@{pipeline().RunId}",
         "file": "@{pipeline().parameters.fileName}",
-        "message": "@{activity('Run data flow').error.message}",
+        "message": "@{activity('${activity}').error.message}",
         "monitorUrl": "${monitor_url_prefix}@{pipeline().RunId}?factory=${factory_id_encoded}"
       }
     }
-  },
-  {
-    "name": "Notify copy failed",
-    "type": "WebActivity",
-    "dependsOn": [
-      {
-        "activity": "Copy to latest",
-        "dependencyConditions": ["Failed"]
-      }
-    ],
-    "policy": {
-      "timeout": "0.00:05:00",
-      "retry": 1,
-      "retryIntervalInSeconds": 30,
-      "secureOutput": false,
-      "secureInput": true
-    },
-    "typeProperties": {
-      "method": "POST",
-      "url": "${notification_url}",
-      "headers": { "Content-Type": "application/json" },
-      "body": {
-        "status": "FAILED",
-        "pipeline": "@{pipeline().Pipeline}",
-        "runId": "@{pipeline().RunId}",
-        "file": "@{pipeline().parameters.fileName}",
-        "message": "@{activity('Copy to latest').error.message}",
-        "monitorUrl": "${monitor_url_prefix}@{pipeline().RunId}?factory=${factory_id_encoded}"
-      }
-    }
-  }
+  }%{ endfor ~}
 ]

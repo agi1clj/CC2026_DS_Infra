@@ -2,15 +2,26 @@
 # no Git integration). Do not edit resources in the ADF portal: the next apply overwrites them.
 #
 #   blob created in bronze/raw/*.csv -> storage event trigger -> pipeline pl-energy-etl
-#   pipeline = Mapping Data Flow (bronze CSV -> silver Parquet + gold JSON in gold/by-timestamp/<run>/) -> Copy to gold/latest/ -> Web activity -> Logic App -> Teams
+#   pipeline = Mapping Data Flow (bronze CSV -> silver Parquet, rejected rows CSV, gold JSON in gold/by-timestamp/<run>/)
+#              -> reject-ratio check -> Copy to gold/latest/ -> Web activity -> Logic App -> Teams
 
 locals {
   # Names used in dataflow/energy_etl.dfs. The azurerm resource needs them as blocks.
   # Add the name of every new transformation and every new gold sink here.
   transformations = [
-    "CleanRows", "DropDuplicates", "AddTypedColumns", "SilverColumns", "DailyTotals", "RoundDaily", "SortDaily",
+    "CleanRows", "AddRejectReason", "DropDuplicates", "AddTypedColumns", "SilverColumns", "DailyTotals", "RoundDaily",
+    "SortDaily",
   ]
   gold_sinks = ["GoldDaily"]
+
+  # Pipeline activities whose failure sends the red Teams card.
+  failed_activities = ["Run data flow", "Check reject ratio", "Copy to latest"]
+
+  # Row counts from the data flow metrics. A sink that wrote zero rows has no entry, hence the contains().
+  flow_metrics  = "activity('Run data flow').output.runStatus.metrics"
+  rows_silver   = "if(contains(${local.flow_metrics}, 'SilverParquet'), ${local.flow_metrics}.SilverParquet.rowsWritten, 0)"
+  rows_rejected = "if(contains(${local.flow_metrics}, 'RejectedCsv'), ${local.flow_metrics}.RejectedCsv.rowsWritten, 0)"
+  rows_read     = "if(contains(${local.flow_metrics}, 'SilverParquet'), ${local.flow_metrics}.SilverParquet.sources.BronzeCsv.rowsRead, if(contains(${local.flow_metrics}, 'RejectedCsv'), ${local.flow_metrics}.RejectedCsv.sources.BronzeCsv.rowsRead, 0))"
 
   # Link to the run in the ADF monitor, built by the Web activities (the run ID is appended).
   monitor_url_prefix = "https://adf.azure.com/en/monitoring/pipelineruns/"
@@ -77,6 +88,24 @@ resource "azurerm_data_factory_dataset_parquet" "silver" {
 
 # The azurerm JSON and binary datasets do not support ADLS locations, so these use custom datasets.
 # Gold history: every run writes gold/by-timestamp/<runFolder>/<file>.json (never deleted).
+# Rejected rows: one CSV file with the reason, silver/rejected/rejected_rows.csv.
+resource "azurerm_data_factory_dataset_delimited_text" "silver_rejected" {
+  name                = "ds_silver_rejected_csv"
+  data_factory_id     = azurerm_data_factory.main.id
+  linked_service_name = azurerm_data_factory_linked_service_data_lake_storage_gen2.lake.name
+
+  azure_blob_fs_location {
+    file_system = "silver"
+    path        = "rejected"
+  }
+
+  column_delimiter    = ","
+  encoding            = "UTF-8"
+  quote_character     = "\""
+  escape_character    = "\\"
+  first_row_as_header = true
+}
+
 resource "azurerm_data_factory_custom_dataset" "gold_json" {
   name            = "ds_gold_json"
   data_factory_id = azurerm_data_factory.main.id
@@ -167,6 +196,14 @@ resource "azurerm_data_factory_data_flow" "energy" {
     }
   }
 
+  sink {
+    name = "RejectedCsv"
+
+    dataset {
+      name = azurerm_data_factory_dataset_delimited_text.silver_rejected.name
+    }
+  }
+
   dynamic "sink" {
     for_each = local.gold_sinks
 
@@ -186,7 +223,8 @@ resource "azurerm_data_factory_pipeline" "energy_etl" {
   data_factory_id = azurerm_data_factory.main.id
 
   parameters = {
-    fileName = "energy_readings.csv"
+    fileName       = "energy_readings.csv"
+    maxRejectRatio = "0.10" # the run fails when more than 10% of the rows read are rejected
   }
 
   variables = {
@@ -197,12 +235,16 @@ resource "azurerm_data_factory_pipeline" "energy_etl" {
   concurrency = 1
 
   activities_json = templatefile("${path.module}/pipeline/energy_etl.json.tftpl", {
-    data_flow_name     = azurerm_data_factory_data_flow.energy.name
-    gold_run_dataset   = azurerm_data_factory_custom_dataset.gold_run_files.name
-    gold_latest_set    = azurerm_data_factory_custom_dataset.gold_latest.name
-    notification_url   = var.notification_url
-    monitor_url_prefix = local.monitor_url_prefix
-    factory_id_encoded = urlencode(azurerm_data_factory.main.id)
+    data_flow_name      = azurerm_data_factory_data_flow.energy.name
+    gold_run_dataset    = azurerm_data_factory_custom_dataset.gold_run_files.name
+    gold_latest_dataset = azurerm_data_factory_custom_dataset.gold_latest.name
+    failed_activities   = local.failed_activities
+    rows_read           = local.rows_read
+    rows_silver         = local.rows_silver
+    rows_rejected       = local.rows_rejected
+    notification_url    = var.notification_url
+    monitor_url_prefix  = local.monitor_url_prefix
+    factory_id_encoded  = urlencode(azurerm_data_factory.main.id)
   })
 }
 
