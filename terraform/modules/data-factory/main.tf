@@ -266,6 +266,17 @@ resource "azurerm_data_factory_pipeline" "energy_etl" {
     monitor_url_prefix   = local.monitor_url_prefix
     factory_id_encoded   = urlencode(azurerm_data_factory.main.id)
   })
+
+  # The names are already references, so Terraform orders create and update after these resources.
+  # Removing or renaming a dataset is different: Terraform deletes the old one without waiting for the
+  # pipeline update, and Data Factory refuses (400) while the live pipeline still uses it.
+  # To rename: add the new dataset and switch the pipeline in one apply, remove the old one in the next.
+  depends_on = [
+    azurerm_data_factory_data_flow.energy,
+    azurerm_data_factory_custom_dataset.gold_staging,
+    azurerm_data_factory_custom_dataset.gold_history,
+    azurerm_data_factory_custom_dataset.gold_latest,
+  ]
 }
 
 # Starts the pipeline when a CSV file appears under bronze/raw/. The trigger needs the
