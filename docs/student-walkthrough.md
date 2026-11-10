@@ -18,7 +18,7 @@ Follow the steps in order. Replace these placeholders everywhere:
 
 **Time:** about 45–60 minutes the first time.
 
-**Cost:** about €16 per month: the App Service Plan B1 (≈ €12) plus the container registry (≈ €4.5), billed per hour while they exist, even with no traffic and even when the apps are stopped. The Azure for Students credit covers this until the final evaluation in January. **Keep everything running until then:** Parts 2, 3 and the final project build on this same infrastructure. Clean up only at the very end (Step 13).
+**Cost:** low: the container registry (Basic, ≈ €4.5 per month) plus Azure Container Apps, which bills per use and has a monthly free grant. Check the Azure pricing calculator for your region. The Azure for Students credit covers this until the final evaluation in January. **Keep everything running until then:** Parts 2, 3 and the final project build on this same infrastructure. Clean up only at the very end (Step 13).
 
 ---
 
@@ -69,7 +69,7 @@ Stop with `Ctrl+C`, then `docker compose down`.
 - **Image**: the built, read-only package (e.g. `backend:3f2a9c1`). The same image runs on your laptop and in Azure.
 - **Container**: a running instance of an image, with its own processes and network.
 - **Docker Compose**: starts several containers together from one file (`docker-compose.yml`), with a shared network.
-- **Ports**: `"3000:8080"` means *host port 3000 → container port 8080*. The backend listens on 8000, Nginx (frontend) on 8080. In Azure, App Service receives HTTPS on 443 and forwards it to the port given by `WEBSITES_PORT`.
+- **Ports**: `"3000:8080"` means *host port 3000 → container port 8080*. The backend listens on 8000, Nginx (frontend) on 8080. In Azure, the Container Apps ingress receives HTTPS on 443 and forwards it to the target port of the app.
 
 ## Step 5 — Log in to Azure
 
@@ -95,10 +95,9 @@ It answers, for *your* subscription and tenant:
 | Check | What a problem means | What to do |
 |---|---|---|
 | Allowed regions (Azure for Students policy) | You picked a blocked region | Pick one from the list it prints |
-| Linux App Service B1 available in the region | No capacity/offer there | Pick another allowed region |
-| App Service quota (B1 instances) in the region | Limit is 0 (common on new / student subscriptions) | Bootstrap requests 1 instance automatically; if refused: portal → *Quotas* → *App Service*, or another region |
+| Azure Container Apps available in the region | No offer there | Pick another allowed region |
 | You are Owner / can assign roles | Bootstrap cannot grant roles | Ask the instructor |
-| Owner is *constrained* (cannot delegate role management) | Not an error | You will create the Web Apps from your laptop in Step 7c |
+| Owner is *constrained* (cannot delegate role management) | Not an error | You will create the container apps from your laptop in Step 7c |
 | Resource providers registered | – | Bootstrap registers them |
 
 You can also check by hand:
@@ -107,9 +106,6 @@ You can also check by hand:
 az account show --query "{name:name, id:id}"                       # which subscription
 az policy assignment list --disable-scope-strict-match \
   --query "[].parameters.listOfAllowedLocations.value" -o json      # allowed regions
-az quota show --resource-name B1 \
-  --scope "/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.Web/locations/<region>" \
-  --query properties.limit.value                                      # B1 quota in <region> (needs: az extension add -n quota)
 az role assignment list --assignee "$(az ad signed-in-user show --query id -o tsv)" \
   --include-inherited --query "[].{role:roleDefinitionName, condition:condition}" -o json   # your roles (if Microsoft Graph is blocked, rely on --check)
 ```
@@ -125,7 +121,6 @@ Answer the prompts (subscription, GitHub user, the two repository names, your in
 What it creates:
 - `rg-cc2026-<initials>-tfstate` with a storage account and a `tfstate` container: where Terraform keeps its state
 - A managed identity `github-actions-cc2026-<initials>` in the tfstate resource group, with federated credentials (two per repository: GitHub uses either a name-based or an ID-based token subject). GitHub Actions on `main` of your two repositories can sign in to Azure with it, without any password
-- If the region's App Service quota is 0: a quota request for 1 B1 instance (usually approved in seconds)
 - Role assignments for that identity (Contributor; AcrPull-only RBAC administration; state access) and state access for you
 - GitHub repository variables in both repositories (*Settings → Secrets and variables → Actions → Variables*)
 - `terraform/environments/dev/backend.hcl` and `terraform.tfvars` (git-ignored), and runs `terraform init`
@@ -136,15 +131,28 @@ Your answers are saved in `bootstrap/bootstrap.env` (not committed). **Renamed a
 
 If it stops with a permissions message, show the output to your instructor (README §8).
 
+**Where do the apps run? Container Apps (default) or App Service**
+
+By default bootstrap deploys the apps to **Azure Container Apps**. It needs no VM quota, which is why it works on Azure for Students subscriptions where App Service B1 is blocked. Both options run the same two containers and give the same result: a frontend URL and a backend URL.
+
+| | Container Apps (default) | App Service (option) |
+|---|---|---|
+| Set in `bootstrap/bootstrap.env` | `HOSTING=container_apps` (or nothing) | `HOSTING=app_service` |
+| Needs B1 quota in your region | No | Yes (bootstrap checks it and requests it) |
+| URL ends with | `.azurecontainerapps.io` | `.azurewebsites.net` |
+| Logs | `az containerapp logs show -g <rg> -n <app> --follow` | `az webapp log tail -g <rg> -n <app>` |
+
+Use App Service only if your instructor tells you to, or if you already started on it. You choose once, before Step 7. If you change it later, Terraform replaces the apps and the URLs change. If you started on App Service earlier, keep it: run `gh variable set HOSTING --body app_service --repo <owner>/<Infra repo>` and put `hosting = "app_service"` in `terraform.tfvars` before you update. The update steps are in the Infra README, section 11b.
+
 ## Step 7 — Deploy the initial infrastructure
 
-A container Web App needs an image, but your registry does not exist yet. The first deployment is therefore done in two Terraform stages (README §11 explains why).
+A container app needs an image, but your registry does not exist yet. The first deployment is therefore done in two Terraform stages (README §11 explains why).
 
 **7a. Registry only (~2 min).** In the **Infra** repository on GitHub: *Actions → terraform → Run workflow → Run*. Bootstrap set `CREATE_WEB_APPS=false`, so this creates only the resource group and the container registry. Wait for the green check.
 
-**7b. Publish the first images (~3 min each).** In the **Apps** repository: *Actions → backend → Run workflow*, then *Actions → frontend → Run workflow*. Both push their images to the registry. The deploy steps are skipped with the notice *"Web App … does not exist yet"*. That is expected.
+**7b. Publish the first images (~3 min each).** In the **Apps** repository: *Actions → backend → Run workflow*, then *Actions → frontend → Run workflow*. Both push their images to the registry. The deploy steps are skipped with the notice *"container app … does not exist yet"*. That is expected.
 
-**7c. Create the Web Apps (~3 min).** First tell Terraform that the Web Apps may now be created (never set this back to `false`):
+**7c. Create the container apps (~3 min).** First tell Terraform that the container apps may now be created (never set this back to `false`):
 
 ```bash
 gh variable set CREATE_WEB_APPS --body true --repo <github-user>/CC2026_<LastName>_<FirstName>_Infra
@@ -152,7 +160,7 @@ gh variable get CI_CAN_ASSIGN_ROLES --repo <github-user>/CC2026_<LastName>_<Firs
 ```
 
 - **`true`**: run *Actions → terraform → Run workflow* again. The **Summary** tab shows `frontend_url` and `backend_url`.
-- **`false`** (your account may assign roles, but not delegate that right to GitHub Actions): create the Web Apps from your laptop. Terraform then runs under your own identity:
+- **`false`** (your account may assign roles, but not delegate that right to GitHub Actions): create the container apps from your laptop. Terraform then runs under your own identity:
 
   ```bash
   cd terraform/environments/dev
@@ -169,18 +177,18 @@ The first start of each container takes 1–3 minutes. Open `<backend_url>/healt
 
 Re-run *backend* and *frontend* in the Apps repository (or push any change to `main`). Each run takes 3–5 minutes:
 
-`test/build → OIDC login → docker build → push :<sha> → update Web App → wait until /health (or /version.txt) shows <sha>`
+`test/build → OIDC login → docker build → push :<sha> → update container app → wait until /health (or /version.txt) shows <sha>`
 
 From now on, every push to `main` that changes `backend/` or `frontend/` deploys automatically. Try it: change the `<h1>` title in `frontend/src/App.tsx`, commit, push, wait for the *frontend* run, then reload the page. `<frontend_url>/version.txt` and `<backend_url>/health` show which commit is live.
 
 ## Step 9 — Verify the Azure resources
 
-Azure portal → *Resource groups* → `rg-cc2026-<initials>-dev`. You should see: the container registry, the App Service Plan, two App Services and a managed identity. Or from the terminal:
+Azure portal → *Resource groups* → `rg-cc2026-<initials>-dev`. You should see: the container registry, a Container Apps environment (or an App Service Plan with `HOSTING=app_service`), two apps and a managed identity. Or from the terminal:
 
 ```bash
 az resource list --resource-group rg-cc2026-<initials>-dev --output table
 az acr repository show-tags --name <acr-name> --repository backend --output table
-az webapp list --resource-group rg-cc2026-<initials>-dev --query "[].{name:name, url:defaultHostName, state:state}" --output table
+az containerapp list --resource-group rg-cc2026-<initials>-dev --query "[].{name:name, url:properties.configuration.ingress.fqdn, state:properties.runningStatus}" --output table
 ```
 
 ## Step 10 — Test the deployed applications
@@ -207,10 +215,10 @@ Open the frontend URL in a browser: the table must show the data. Open the brows
 GitHub → *Actions* → open a **backend** run:
 - **Trigger**: `push` on `main` (only when `backend/**`, `scripts/wait-for-version.sh` or the workflow file changed) or a manual run
 - **Job `test`**: installs dependencies and runs pytest; on a pull request only this job runs
-- **Job `deploy`** (`needs: test`): OIDC login, image build and push to ACR (tags `<sha>` and `latest`), Web App update, health verification
+- **Job `deploy`** (`needs: test`): OIDC login, image build and push to ACR (tags `<sha>` and `latest`), container app update, health verification
 - **Runner**: `ubuntu-latest`, a fresh VM provided by GitHub for each job
 
-Compare *build* (creating the image) with *release* (switching the Web App to that image). The `:<sha>` tag lets you tell exactly which commit is live.
+Compare *build* (creating the image) with *release* (switching the container app to that image). The `:<sha>` tag lets you tell exactly which commit is live.
 
 ## Step 12 — Review Terraform
 
@@ -226,7 +234,7 @@ terraform output                             # prints names and URLs
 cd ../../..
 ```
 
-Look at `locals.tf` (names, tags), `main.tf` (resource group + 2 modules), `modules/app-service/main.tf` (Web Apps, ports, CORS, identity).
+Look at `locals.tf` (names, tags), `main.tf` (resource group + 2 modules), `modules/container-apps/main.tf` (environment, container apps, ports, CORS, identity; `modules/app-service/` is the optional App Service version).
 
 ## Step 13 — Cleanup
 
@@ -256,4 +264,4 @@ Submit:
 - The README documentation
 - Evidence of successful GitHub Actions runs: links to green runs of `backend`, `frontend` and `terraform` (or screenshots of the *Actions* tab)
 
-Be ready to explain: IaaS vs PaaS vs SaaS (App Service is PaaS), REST and HTTP status codes, workflow triggers / jobs / runners, build vs release, environment variables (`API_BASE_URL`, `CORS_ORIGINS`), CI/CD, Terraform (state, `plan` vs `apply`, variables and outputs), Docker images and the container registry, and how GitHub Actions signs in to Azure without a password (OIDC).
+Be ready to explain: IaaS vs PaaS vs SaaS (Container Apps is PaaS), REST and HTTP status codes, workflow triggers / jobs / runners, build vs release, environment variables (`API_BASE_URL`, `CORS_ORIGINS`), CI/CD, Terraform (state, `plan` vs `apply`, variables and outputs), Docker images and the container registry, and how GitHub Actions signs in to Azure without a password (OIDC).

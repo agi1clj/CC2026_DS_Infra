@@ -22,22 +22,19 @@ mock_provider "azurerm" {
       id = "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-cc2026-agi-dev/providers/Microsoft.Web/serverFarms/asp-mock"
     }
   }
-}
 
-# Mocked resources get random computed values; pin the host names Azure would assign.
-override_resource {
-  target = module.app_service[0].azurerm_linux_web_app.frontend
-  values = { default_hostname = "cc2026-ui-agi-dev-e6d3.azurewebsites.net" }
-}
-
-override_resource {
-  target = module.app_service[0].azurerm_linux_web_app.backend
-  values = { default_hostname = "cc2026-api-agi-dev-e6d3.azurewebsites.net" }
+  mock_resource "azurerm_container_app_environment" {
+    defaults = {
+      id             = "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-cc2026-agi-dev/providers/Microsoft.App/managedEnvironments/cae-mock"
+      default_domain = "happyfield-1234abcd.germanywestcentral.azurecontainerapps.io"
+    }
+  }
 }
 
 variables {
   student_initials = "agi"
   subscription_id  = "11111111-2222-3333-4444-555555555555"
+  hosting          = "container_apps"
 }
 
 run "names_follow_convention" {
@@ -55,12 +52,12 @@ run "names_follow_convention" {
 
   assert {
     condition     = can(regex("^cc2026-api-agi-dev-[0-9a-f]{4}$", local.backend_app_name))
-    error_message = "Unexpected backend Web App name: ${local.backend_app_name}"
+    error_message = "Unexpected backend app name: ${local.backend_app_name}"
   }
 
   assert {
     condition     = can(regex("^cc2026-ui-agi-dev-[0-9a-f]{4}$", local.frontend_app_name))
-    error_message = "Unexpected frontend Web App name: ${local.frontend_app_name}"
+    error_message = "Unexpected frontend app name: ${local.frontend_app_name}"
   }
 }
 
@@ -72,21 +69,56 @@ run "registry_only_first_stage" {
   }
 
   assert {
-    condition     = length(module.app_service) == 0
-    error_message = "Web Apps must not be planned while create_web_apps is false."
+    condition     = length(module.container_apps) == 0 && length(module.app_service) == 0
+    error_message = "Apps must not be planned while create_web_apps is false."
   }
 }
 
-run "web_apps_are_wired_together" {
+run "container_apps_are_wired_together" {
   command = apply # against the mocked provider only
 
   assert {
-    condition     = output.frontend_url == "https://cc2026-ui-agi-dev-e6d3.azurewebsites.net"
+    condition     = length(module.container_apps) == 1 && length(module.app_service) == 0
+    error_message = "hosting = container_apps must create only the Container Apps module."
+  }
+
+  assert {
+    condition     = output.frontend_url == "https://cc2026-ui-agi-dev-e6d3.happyfield-1234abcd.germanywestcentral.azurecontainerapps.io"
     error_message = "Unexpected frontend URL: ${output.frontend_url}"
   }
 
   assert {
-    condition     = output.backend_url == "https://cc2026-api-agi-dev-e6d3.azurewebsites.net"
+    condition     = output.backend_url == "https://cc2026-api-agi-dev-e6d3.happyfield-1234abcd.germanywestcentral.azurecontainerapps.io"
     error_message = "Unexpected backend URL: ${output.backend_url}"
+  }
+}
+
+# Same wiring for the App Service hosting. Mocked resources get random computed values,
+# so the host names Azure would assign are pinned here.
+run "app_service_hosting_is_wired_together" {
+  command = apply # against the mocked provider only
+
+  variables {
+    hosting = "app_service"
+  }
+
+  override_resource {
+    target = module.app_service[0].azurerm_linux_web_app.frontend
+    values = { default_hostname = "cc2026-ui-agi-dev-e6d3.azurewebsites.net" }
+  }
+
+  override_resource {
+    target = module.app_service[0].azurerm_linux_web_app.backend
+    values = { default_hostname = "cc2026-api-agi-dev-e6d3.azurewebsites.net" }
+  }
+
+  assert {
+    condition     = length(module.app_service) == 1 && length(module.container_apps) == 0
+    error_message = "hosting = app_service must create only the App Service module."
+  }
+
+  assert {
+    condition     = output.frontend_url == "https://cc2026-ui-agi-dev-e6d3.azurewebsites.net" && output.backend_url == "https://cc2026-api-agi-dev-e6d3.azurewebsites.net"
+    error_message = "Unexpected App Service URLs: ${output.frontend_url} ${output.backend_url}"
   }
 }

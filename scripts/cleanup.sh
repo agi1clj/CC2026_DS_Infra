@@ -2,7 +2,7 @@
 # =============================================================================
 # CC2026 cleanup: removes what you created, one deliberate step at a time.
 #
-#   Step 1  terraform destroy of the application infrastructure (RG, ACR, App Service)
+#   Step 1  terraform destroy of the application infrastructure (RG, ACR, Container Apps)
 #   Step 2  (optional) GitHub Actions identity: role assignments + managed identity
 #   Step 3  (optional) Terraform state storage (only after step 1 succeeded)
 #

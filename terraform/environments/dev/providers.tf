@@ -7,6 +7,7 @@ provider "azurerm" {
   # (Locally Terraform authenticates with `az login`; in CI with GitHub OIDC via ARM_* variables.)
   resource_provider_registrations = "none"
   resource_providers_to_register = [
+    "Microsoft.App",
     "Microsoft.ContainerRegistry",
     "Microsoft.ManagedIdentity",
     "Microsoft.Web",

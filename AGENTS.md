@@ -4,7 +4,7 @@ Teaching project (UTCN Cloud Computing). Azure infra for the companion Apps repo
 
 ## Layout
 - `terraform/environments/dev/` the only root module (remote state key `dev.tfstate`). Names and tags live in `locals.tf`.
-- `terraform/modules/<service>/` one small module per service (`main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`).
+- `terraform/modules/<service>/` one small module per service (`container-registry`, `container-apps`, `app-service`) (`main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`).
 - `bootstrap/bootstrap.sh` one-time state storage, GitHub Actions managed identity + OIDC, roles, GitHub variables. `scripts/cleanup.sh` deliberate teardown.
 - How to add services: `docs/extending.md`.
 
@@ -17,8 +17,9 @@ Teaching project (UTCN Cloud Computing). Azure infra for the companion Apps repo
 - Never run `terraform apply`/`destroy`, `bootstrap.sh` or `cleanup.sh` against Azure without explicit user approval. Destroy only after showing `plan -destroy`.
 - Follow the HashiCorp style guide: every variable has `type` + `description`, every output a `description`; no provisioners; no hard-coded IDs or secrets.
 - Do not commit `terraform.tfvars`, `backend.hcl` or state. Do commit `.terraform.lock.hcl` (lock for linux_amd64, darwin_arm64, darwin_amd64, windows_amd64).
-- `ignore_changes` covers only `docker_image_name` (Apps CI owns image tags). Never widen it.
-- `CREATE_WEB_APPS` must never go back to `false` once Web Apps exist (it would delete them).
+- `ignore_changes` covers only the image (Container Apps: `template[0].container[0].image`; App Service: `docker_image_name`). Apps CI owns image tags. Never widen it.
+- `hosting` selects `container_apps` (default) or `app_service`; exactly one module is created. Changing it replaces the apps. Keep both modules working and tested.
+- `CREATE_WEB_APPS` must never go back to `false` once the apps exist (it would delete them).
 - New roles Terraform assigns must be added to `ASSIGNABLE_ROLE_IDS` in `bootstrap.sh`; new resource providers to both `bootstrap.sh` and `providers.tf`.
 - Commits follow Conventional Commits: `type(scope): summary` with type in feat, fix, docs, refactor, test, ci, build, chore (e.g. `fix(bootstrap): reuse existing state resource group`).
 
