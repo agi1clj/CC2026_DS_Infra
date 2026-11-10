@@ -277,7 +277,7 @@ git checkout template/main -- .
 git add -A && git commit -m "Add Container Apps hosting" && git push
 ```
 
-If `git remote add` says `template` already exists, skip that line. The Apps workflows detect on their own whether the app runs on App Service or Container Apps.
+If `git remote add` says `template` already exists, skip that line. This copies files, it does not merge, so there are no merge conflicts. If you already started Part 2, use `template/p2` instead of `template/main`: `main` has no Part 2 files and would remove them from your Infra repository. The Apps workflows detect on their own whether the app runs on App Service or Container Apps.
 
 **2. You have not created the apps yet** (you never ran bootstrap, or you stopped before Step 7c of the walkthrough). Use Container Apps from the start:
 
