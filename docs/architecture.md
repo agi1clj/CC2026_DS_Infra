@@ -119,7 +119,7 @@ flowchart LR
     end
     logic[Logic App]
     teams([Teams channel])
-    subgraph web["Web Apps (P1)"]
+    subgraph web["Apps (P1)"]
         be[Backend<br/>managed identity, Reader]
         fe[Frontend]
     end
