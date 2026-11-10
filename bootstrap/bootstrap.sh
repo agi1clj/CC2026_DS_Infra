@@ -31,7 +31,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
 readonly TF_DIR="$REPO_ROOT/terraform/environments/dev"
 readonly SETTINGS_FILE="$REPO_ROOT/bootstrap/bootstrap.env"
-readonly SAVED_SETTINGS=(AZURE_SUBSCRIPTION_ID GITHUB_OWNER APPS_REPO INFRA_REPO STUDENT_INITIALS AZURE_LOCATION APP_SERVICE_SKU ACR_SKU)
+readonly SAVED_SETTINGS=(AZURE_SUBSCRIPTION_ID GITHUB_OWNER APPS_REPO INFRA_REPO STUDENT_INITIALS AZURE_LOCATION HOSTING APP_SERVICE_SKU ACR_SKU)
 
 readonly GITHUB_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 readonly OIDC_AUDIENCE="api://AzureADTokenExchange"
@@ -44,7 +44,7 @@ readonly ASSIGNABLE_ROLE_IDS=(
   2a2b9908-6ea1-4ae2-8e65-a410df84e7d1 # Storage Blob Data Reader (P2: backend reads gold)
 )
 # Extension point: add the namespace of every new Azure service.
-readonly RESOURCE_PROVIDERS=(Microsoft.Storage Microsoft.ContainerRegistry Microsoft.Web Microsoft.ManagedIdentity Microsoft.Quota Microsoft.DataFactory Microsoft.EventGrid Microsoft.Logic)
+readonly RESOURCE_PROVIDERS=(Microsoft.Storage Microsoft.ContainerRegistry Microsoft.App Microsoft.Web Microsoft.ManagedIdentity Microsoft.Quota Microsoft.DataFactory Microsoft.EventGrid Microsoft.Logic)
 
 # Steps that failed because of missing permissions; printed at the end.
 MANUAL_STEPS=()
@@ -184,6 +184,12 @@ collect_inputs() {
   fi
 
   PROJECT_NAME="${PROJECT_NAME:-cc2026}"
+  # Where the apps run: container_apps (new setups, no VM quota needed) or app_service (needs B1 quota).
+  # A bootstrap.env without HOSTING comes from the App Service version: keep that setup.
+  if [[ -z "${HOSTING:-}" ]]; then
+    if [[ -f "$SETTINGS_FILE" ]]; then HOSTING=app_service; else HOSTING=container_apps; fi
+  fi
+  [[ "$HOSTING" == "container_apps" || "$HOSTING" == "app_service" ]] || die "HOSTING must be container_apps or app_service (got '$HOSTING')."
   APP_SERVICE_SKU="${APP_SERVICE_SKU:-B1}"
   ACR_SKU="${ACR_SKU:-Basic}"
 
@@ -254,6 +260,10 @@ check_github_repositories() {
 }
 
 check_region() {
+  if [[ "$HOSTING" == "container_apps" ]]; then
+    check_container_apps_region
+    return
+  fi
   # Region policy was already enforced in collect_inputs; here: can this region host Linux B1?
   local b1_regions
   b1_regions="$(az appservice list-locations --sku "$APP_SERVICE_SKU" --linux-workers-enabled --query "[].name" --output tsv 2>/dev/null |
@@ -262,6 +272,19 @@ check_region() {
     ok "Region $AZURE_LOCATION supports Linux App Service $APP_SERVICE_SKU"
   else
     problem "Region $AZURE_LOCATION does not offer Linux App Service $APP_SERVICE_SKU. Choose another region (AZURE_LOCATION=...)."
+  fi
+}
+
+check_container_apps_region() {
+  local aca_regions
+  aca_regions="$(az provider show --namespace Microsoft.App --query "resourceTypes[?resourceType=='managedEnvironments'].locations[]" --output tsv 2>/dev/null |
+    tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+  if [[ -z "$aca_regions" ]]; then
+    warn "Could not read the Container Apps regions (fine; the apply will tell)."
+  elif grep -qx "$AZURE_LOCATION" <<<"$aca_regions"; then
+    ok "Region $AZURE_LOCATION supports Azure Container Apps"
+  else
+    problem "Region $AZURE_LOCATION does not offer Azure Container Apps. Choose another region (AZURE_LOCATION=...)."
   fi
 }
 
@@ -274,6 +297,7 @@ quota_scope() {
 
 check_app_service_quota() {
   QUOTA_SHORTFALL=false
+  [[ "$HOSTING" == "app_service" ]] || return 0 # Container Apps (Consumption) needs no VM quota
   az extension add --name quota --upgrade --only-show-errors >/dev/null 2>&1 || true
   local limit usage
   limit="$(az quota show --resource-name "$APP_SERVICE_SKU" --scope "$(quota_scope)" --query properties.limit.value --output tsv 2>/dev/null || true)"
@@ -581,6 +605,7 @@ environment      = "dev"
 location         = "$AZURE_LOCATION"
 subscription_id  = "$AZURE_SUBSCRIPTION_ID"
 
+hosting         = "$HOSTING"
 app_service_sku = "$APP_SERVICE_SKU"
 acr_sku         = "$ACR_SKU"
 EOF
@@ -632,6 +657,7 @@ configure_github_variables() {
   set_github_variable "$INFRA_REPO" PROJECT_NAME "$PROJECT_NAME"
   set_github_variable "$INFRA_REPO" STUDENT_INITIALS "$STUDENT_INITIALS"
   set_github_variable "$INFRA_REPO" AZURE_LOCATION "$AZURE_LOCATION"
+  set_github_variable "$INFRA_REPO" HOSTING "$HOSTING"
   set_github_variable "$INFRA_REPO" APP_SERVICE_SKU "$APP_SERVICE_SKU"
   set_github_variable "$INFRA_REPO" ACR_SKU "$ACR_SKU"
   set_github_variable "$INFRA_REPO" TFSTATE_RESOURCE_GROUP "$STATE_RESOURCE_GROUP"
@@ -659,7 +685,7 @@ print_summary() {
     exit 2
   fi
 
-  local stage3="run \"terraform\" again                            (creates App Service + Web Apps)"
+  local stage3="run \"terraform\" again                            (creates the apps)"
   if [[ "$CI_CAN_ASSIGN_ROLES" == "false" ]]; then
     stage3="cd terraform/environments/dev && terraform apply    (locally: creates App Service + Web Apps)"
   fi
@@ -675,9 +701,8 @@ Next steps (details in README > "Initial deployment"):
                  -> $stage3
   4. Apps repo   -> run "backend" and "frontend" again               (deploys commit-tagged images)
 
-Expected URLs after step 3:
-  Frontend: https://$FRONTEND_WEBAPP_NAME.azurewebsites.net
-  Backend:  https://$BACKEND_WEBAPP_NAME.azurewebsites.net/api/data
+Hosting: $HOSTING. The URLs are in the Terraform outputs after step 3 (frontend_url, backend_url:
+workflow summary or "terraform output"). The backend data is at <backend_url>/api/data.
 EOF
 }
 

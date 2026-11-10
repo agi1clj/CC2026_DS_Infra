@@ -16,9 +16,9 @@ flowchart LR
     subgraph app["rg-cc2026-&lt;initials&gt;-dev (Terraform)"]
         acr[(ACR Basic)]
         id[User-assigned identity] -- AcrPull --> acr
-        subgraph asp["App Service Plan Linux B1"]
-            be[Backend Web App]
-            fe[Frontend Web App]
+        subgraph cae["Container Apps environment"]
+            be[Backend container app]
+            fe[Frontend container app]
         end
         id -.- be & fe
     end
@@ -39,15 +39,17 @@ More diagrams (conceptual, UML deployment, CI/CD): [docs/architecture.md](docs/a
 | Federated credentials | `github-apps-main(-ids)`, `github-infra-main(-ids)` | bootstrap | Trust GitHub OIDC tokens from `main` of each repo (name-based and ID-based subject) |
 | Resource group | `rg-cc2026-agi-dev` | Terraform | Everything below |
 | Container registry (Basic) | `acrcc2026agidev<4 hex>` | Terraform | Stores `backend` and `frontend` images |
-| User-assigned identity | `id-cc2026-agi-dev-webapps` | Terraform | Web Apps pull from ACR with it (AcrPull); also reads the gold files in P2 (Storage Blob Data Reader) |
-| App Service Plan (Linux, B1) | `asp-cc2026-agi-dev` | Terraform | One shared VM for both apps |
-| Linux Web App (container) | `cc2026-api-agi-dev-<4 hex>` | Terraform | Backend, port 8000 |
-| Linux Web App (container) | `cc2026-ui-agi-dev-<4 hex>` | Terraform | Frontend, port 8080 |
+| User-assigned identity | `id-cc2026-agi-dev-apps` | Terraform | The container apps pull from ACR with it (AcrPull); also reads the gold files in P2 (Storage Blob Data Reader) |
+| Container Apps environment (Consumption) | `cae-cc2026-agi-dev` | Terraform | Shared environment for both apps; no VM quota needed |
+| Container app | `cc2026-api-agi-dev-<4 hex>` | Terraform | Backend, port 8000 |
+| Container app | `cc2026-ui-agi-dev-<4 hex>` | Terraform | Frontend, port 8080 |
 | Storage account (ADLS Gen2) + containers `bronze`, `silver`, `gold` | `stcc2026agidev<4 hex>` | Terraform | P2 data lake: bronze (raw), silver (clean + `rejected/`), gold (JSON). LRS, TLS 1.2, no shared keys, no public access, soft delete 7 days |
 | Data Factory (system-assigned identity, live mode) | `adf-cc2026-agi-dev-<4 hex>` | Terraform | P2 pipeline `pl-energy-etl`: data flow, copy to `gold/by-timestamp/<run>/` and `gold/latest/`, blob event trigger |
 | Logic App (Consumption) | `logic-cc2026-agi-dev-notify` | Terraform | P2: turns the pipeline status into a Teams card |
 
-The hex suffixes come from a hash of the subscription ID and your initials. They are deterministic: every run, local or CI, produces the same names. They keep globally unique names (ACR, Web Apps, Storage) from colliding between students with the same initials.
+With `hosting = app_service` the Container Apps environment is replaced by an App Service Plan `asp-cc2026-agi-dev` (Linux, B1), the identity is named `id-cc2026-agi-dev-webapps` and the apps are Linux Web Apps with `.azurewebsites.net` URLs.
+
+The hex suffixes come from a hash of the subscription ID and your initials. They are deterministic: every run, local or CI, produces the same names. They keep globally unique names (ACR, container apps, Storage) from colliding between students with the same initials.
 
 ## 3. Terraform module structure
 
@@ -55,7 +57,8 @@ The hex suffixes come from a hash of the subscription ID and your initials. They
 terraform/
 ├── modules/
 │   ├── container-registry/   azurerm_container_registry (admin user disabled)
-│   ├── app-service/          plan, identity + AcrPull, backend + frontend Web Apps
+│   ├── container-apps/       environment, identity + AcrPull, backend + frontend container apps
+│   ├── app-service/          optional hosting (hosting = app_service): plan, identity + AcrPull, backend + frontend Web Apps
 │   │                         (inputs backend_app_settings / frontend_app_settings for later parts)
 │   ├── storage/              P2: ADLS Gen2 account, containers bronze / silver / gold
 │   ├── data-factory/         P2: factory, linked service (managed identity), datasets,
@@ -79,7 +82,7 @@ Design rules, from the HashiCorp Terraform style guide and the terraform-skill g
 - One environment (`dev`) and small modules, one per service. No wrappers, workspaces or Terragrunt.
 - Every variable has a type, a description and, where useful, a validation. Every output has a description.
 - Names are computed in one place (`locals.tf`). The bootstrap script reads them from Terraform instead of copying the formula.
-- No provisioners, no secrets, no hard-coded IDs. The only `depends_on` (Web Apps → AcrPull role assignment) is explained in a comment.
+- No provisioners, no secrets, no hard-coded IDs. The only `depends_on` (container apps → AcrPull role assignment) is explained in a comment.
 
 ## 4. Environment configuration
 
@@ -100,7 +103,8 @@ Both come from the same answers you give `bootstrap.sh`, so local and CI runs re
 | `project_name` | `cc2026` | Name prefix |
 | `environment` | `dev` | Only `dev` exists |
 | `location` | `germanywestcentral` | Azure region (must be allowed by the subscription's region policy) |
-| `app_service_sku` | `B1` | Plan SKU (B1 or higher, needed for Always On) |
+| `hosting` | `app_service` | Where the apps run: `container_apps` (no VM quota; set by bootstrap for new setups) or `app_service` (App Service Plan, needs B1 quota). The default keeps existing setups unchanged. GitHub variable `HOSTING` |
+| `app_service_sku` | `B1` | Plan SKU, used only with `hosting = app_service` |
 | `acr_sku` | `Basic` | Registry SKU |
 | `create_web_apps` | `true` | `false` only for the first apply (see §11) |
 | `teams_webhook_url` | `""` | P2: Teams Workflows webhook URL (sensitive). Empty = no Teams cards. GitHub secret `TEAMS_WEBHOOK_URL` |
@@ -112,7 +116,7 @@ Locals: `name_base` (`cc2026-agi-dev`), `unique_suffix`, all resource names, and
 | `resource_group_name` | Apps repo variable `RESOURCE_GROUP` |
 | `acr_name`, `acr_login_server` | Apps repo variable `ACR_NAME` |
 | `backend_webapp_name`, `frontend_webapp_name` | Apps repo variables `BACKEND_WEBAPP_NAME`, `FRONTEND_WEBAPP_NAME` |
-| `backend_url`, `frontend_url` | You (submission) – `null` until the Web Apps exist |
+| `backend_url`, `frontend_url` | You (submission) – `null` until the apps exist |
 | `storage_account_name`, `storage_blob_endpoint`, `data_factory_name`, `upload_command` | P2 (`az storage blob upload`, Data Factory Monitor) |
 
 ## 6. Terraform remote state
@@ -170,8 +174,8 @@ Granted to the **GitHub Actions identity**:
 
 | Role | Scope | Why |
 |---|---|---|
-| Contributor | subscription | Terraform creates the app resource group; workflows push images and update Web Apps |
-| Role Based Access Control Administrator, **conditioned to the roles in `ASSIGNABLE_ROLE_IDS` (today: AcrPull, Storage Blob Data Contributor, Storage Blob Data Reader)** | subscription | Terraform must grant `AcrPull` to the Web Apps' identity and the two storage roles to Data Factory and the backend. Plain Contributor cannot create role assignments; the condition stops this identity from granting itself or anyone else any other role |
+| Contributor | subscription | Terraform creates the app resource group; workflows push images and update the apps |
+| Role Based Access Control Administrator, **conditioned to the roles in `ASSIGNABLE_ROLE_IDS` (today: AcrPull, Storage Blob Data Contributor, Storage Blob Data Reader)** | subscription | Terraform must grant `AcrPull` to the apps' identity and the two storage roles to Data Factory and the backend. Plain Contributor cannot create role assignments; the condition stops this identity from granting itself or anyone else any other role |
 | Storage Blob Data Contributor | state storage account | Read/write/lock `dev.tfstate` |
 
 > **Trade-off, stated plainly:** one identity serves both repositories and holds Contributor on the whole subscription. That is acceptable for a personal lab subscription, but it is broader than production practice. A production setup would use one identity per repository and pre-create the resource group, so Contributor could be scoped to it.
@@ -181,8 +185,8 @@ Granted to the **GitHub Actions identity**:
 | Constraint | Effect | Handled by |
 |---|---|---|
 | Policy *Allowed resource deployment regions* (e.g. germanywestcentral, francecentral, swedencentral, spaincentral, polandcentral) | Deployments elsewhere fail with `RequestDisallowedByPolicy` | `bootstrap.sh` reads the policy, defaults to an allowed region and rejects others |
-| App Service quota 0 in some regions (`B1 VMs` limit) | Plan creation fails: *Operation cannot be completed without additional quota* | Preflight reads the quota; bootstrap requests 1 instance via the Quota API |
-| Fixed credit, no pay-as-you-go | Resources stop when credit runs out | Use B1 + ACR Basic only; run `cleanup.sh` after the final evaluation |
+| App Service VMs (B1) are often blocked or have quota 0 | This is why new setups use Container Apps (Consumption, no VM quota) | Preflight checks that the region offers Container Apps; with `HOSTING=app_service` it checks the B1 quota instead |
+| Fixed credit, no pay-as-you-go | Resources stop when credit runs out | Use Container Apps (Consumption) + ACR Basic only; run `cleanup.sh` after the final evaluation |
 | University tenant blocks app registrations | No Entra application possible | Bootstrap uses a user-assigned managed identity (below) |
 | Owner may be constrained (cannot assign RBAC roles to others) | GitHub identity cannot create AcrPull assignments | Local stage-3 apply (§11) |
 
@@ -197,7 +201,7 @@ The one hard requirement is Owner (or User Access Administrator / RBAC Administr
 ```bash
 az login
 gh auth login --scopes workflow   # 'workflow' is needed to push .github/workflows files
-./bootstrap/bootstrap.sh --check   # read-only preflight: regions, B1 availability + quota, role rights
+./bootstrap/bootstrap.sh --check   # read-only preflight: regions, Container Apps availability, role rights
 ./bootstrap/bootstrap.sh
 ```
 
@@ -232,14 +236,14 @@ terraform output
 
 ## 11. Initial application deployment (the "first image" problem)
 
-A container Web App needs an image to start, but at the beginning the registry does not exist and holds no images. Terraform must not point a Web App at an image that was never published. The first deployment therefore has **two Terraform stages** inside one configuration and one state, controlled by the `create_web_apps` variable (GitHub variable `CREATE_WEB_APPS`):
+A container app needs an image to start, but at the beginning the registry does not exist and holds no images. Terraform must not point a container app at an image that was never published. The first deployment therefore has **two Terraform stages** inside one configuration and one state, controlled by the `create_web_apps` variable (GitHub variable `CREATE_WEB_APPS`):
 
 | # | Where | Action | Result |
 |---|---|---|---|
 | 1 | Infra | `bootstrap.sh` sets `CREATE_WEB_APPS=false`; run **terraform** workflow | Resource group + ACR only |
 | 2 | Apps | Push to `main` (or run **backend** and **frontend** manually) | Images `backend:<sha>`, `backend:latest`, `frontend:<sha>`, `frontend:latest` in ACR; deploy step skipped with a notice |
-| 3 | Infra | `gh variable set CREATE_WEB_APPS --body true --repo <owner>/<Infra repo>`, then run **terraform** again. If bootstrap reported `CI_CAN_ASSIGN_ROLES=false`, run `terraform apply` locally instead (see below) | Plan, identity, AcrPull, Web Apps created on `:latest` |
-| 4 | Apps | Re-run **backend** and **frontend** | Web Apps switched to `:<sha>`, `/health` verified |
+| 3 | Infra | `gh variable set CREATE_WEB_APPS --body true --repo <owner>/<Infra repo>`, then run **terraform** again. If bootstrap reported `CI_CAN_ASSIGN_ROLES=false`, run `terraform apply` locally instead (see below) | Environment, identity, AcrPull, container apps created on `:latest` |
+| 4 | Apps | Re-run **backend** and **frontend** | Container apps switched to `:<sha>`, `/health` verified |
 
 From then on, every push to `main` in the Apps repo deploys automatically. The Terraform workflow refuses stage 3 if `backend:latest` or `frontend:latest` is missing from ACR.
 
@@ -248,18 +252,71 @@ From then on, every push to `main` in the Apps repo deploys automatically. The T
 ```bash
 cd terraform/environments/dev
 terraform init -backend-config=backend.hcl
-terraform apply      # review: plan, identity, AcrPull, 2 Web Apps
+terraform apply      # review: environment, identity, AcrPull, 2 container apps
 ```
 
 Later CI runs only update resources and pass. The workflow stops with a clear error if a plan would create or delete role assignments.
 
-**Never set `CREATE_WEB_APPS` back to `false`**: the next apply would delete the Web Apps. `bootstrap.sh` does not overwrite it once it exists.
+**Never set `CREATE_WEB_APPS` back to `false`**: the next apply would delete the container apps. `bootstrap.sh` does not overwrite it once it exists.
 
-**Image drift.** Terraform sets the image only when it creates the Web App. Afterwards the Apps workflows change it to `:<sha>`. Terraform ignores exactly one attribute, `site_config[0].application_stack[0].docker_image_name`. Drift in every other setting (ports, CORS, TLS, identity…) is still detected and corrected.
+**Image drift.** Terraform sets the image only when it creates the container app. Afterwards the Apps workflows change it to `:<sha>` (a new revision). Terraform ignores exactly one attribute, `template[0].container[0].image`. Drift in every other setting (ports, CORS, TLS, identity…) is still detected and corrected.
 
-**Why a user-assigned identity?** With a system-assigned identity, the AcrPull role can only be granted *after* the Web App exists, so the very first image pull fails. The user-assigned identity gets AcrPull first and the Web Apps are created afterwards. This is a deliberate deviation from "system-assigned identity".
+**Why a user-assigned identity?** With a system-assigned identity, the AcrPull role can only be granted *after* the container app exists, so the very first image pull fails. The user-assigned identity gets AcrPull first and the container apps are created afterwards. This is a deliberate deviation from "system-assigned identity".
 
-**CORS and the frontend URL.** The frontend needs the backend URL (`API_BASE_URL`, taken from the backend's real host name). The backend needs the frontend origin (`CORS_ORIGINS`). Wiring both ways would be a dependency cycle, so the frontend origin is derived from its name (`https://<name>.azurewebsites.net`). A Terraform `check` block warns if Azure ever assigns a different host name.
+**CORS and the frontend URL.** The frontend needs the backend URL (`API_BASE_URL`, taken from the backend's real host name). The backend needs the frontend origin (`CORS_ORIGINS`). Wiring both ways would be a dependency cycle, so both host names are built from the app names and the environment's default domain (`https://<name>.<default domain>`), which Azure assigns to the environment before the apps exist.
+
+## 11b. Updating an existing deployment (App Service or Container Apps)
+
+New setups run on Azure Container Apps: `bootstrap.sh` sets `HOSTING=container_apps`. App Service is still supported with `hosting = app_service`. The Terraform default is `app_service`, so an existing deployment does not change when you update. The GitHub variable names (`BACKEND_WEBAPP_NAME`, `FRONTEND_WEBAPP_NAME`, `CREATE_WEB_APPS`) did not change.
+
+**1. Get the new version in both repositories** (everyone). Your repositories were created from a template, so add the template as a remote and copy the changed files:
+
+```bash
+# Apps repository (only the workflows; your own backend and frontend code stays untouched)
+cd CC2026_<LastName>_<FirstName>_Apps
+git remote add template https://github.com/agi1clj/CC2026_DS_Applications.git
+git fetch template
+git checkout template/p2 -- .github/workflows/backend.yml .github/workflows/frontend.yml
+git commit -am "Deploy to Container Apps or App Service" && git push
+
+# Infra repository (all files; you do not edit them)
+cd ../CC2026_<LastName>_<FirstName>_Infra
+git remote add template https://github.com/agi1clj/CC2026_DS_Infra.git
+git fetch template
+git checkout template/p2 -- .
+git add -A && git commit -m "Add Container Apps hosting" && git push
+```
+
+If `git remote add` says `template` already exists, skip that line. This copies files, it does not merge, so there are no merge conflicts. Use `template/p2` while you work on Part 2: `template/main` has no Part 2 files and would remove them from your Infra repository. The Apps workflows detect on their own whether the app runs on App Service or Container Apps.
+
+**2. You have not created the apps yet** (you never ran bootstrap, or you stopped before Step 7c of the walkthrough). Use Container Apps from the start:
+
+```bash
+HOSTING=container_apps ./bootstrap/bootstrap.sh
+```
+
+Bootstrap is safe to re-run: it updates `terraform.tfvars` and the GitHub variables (`HOSTING` included) and keeps `CREATE_WEB_APPS`. Then continue with the walkthrough at Step 7. If you never ran bootstrap, plain `./bootstrap/bootstrap.sh` already uses Container Apps.
+
+**3. Stay on App Service.** Nothing else to do. The **terraform** workflow shows `No changes`.
+
+**4. Move to Container Apps after the apps exist on App Service** (for example because B1 does not work for you). The URLs change.
+
+```bash
+gh variable set HOSTING --body container_apps --repo <owner>/<Infra repo>
+# local apply only: add  hosting = "container_apps"  to terraform/environments/dev/terraform.tfvars
+```
+
+Then run the **terraform** workflow (*Actions → terraform → Run workflow*). If bootstrap reported `CI_CAN_ASSIGN_ROLES=false`, run it on your laptop instead:
+
+```bash
+cd terraform/environments/dev
+terraform init -backend-config=backend.hcl
+terraform apply
+```
+
+Terraform deletes the App Service Plan, the two Web Apps and the old identity. It creates the Container Apps environment, the new identity (`id-...-apps`), the role assignments and two container apps on `:latest`. ACR, images and state stay. Then re-run **backend** and **frontend** in the Apps repository and read the new URLs with `terraform output frontend_url backend_url` (they end in `.azurecontainerapps.io`).
+
+You do not need to re-run `bootstrap.sh` for an existing deployment. If you do re-run it, an existing `bootstrap/bootstrap.env` keeps you on App Service; set `HOSTING=container_apps` in that file to move. For a new setup, `./bootstrap/bootstrap.sh --check` and then `./bootstrap/bootstrap.sh` work as before (§9) and use Container Apps. If the apply fails with a `Microsoft.App` registration error, run `az provider register --namespace Microsoft.App --wait`.
 
 ## 12. Terraform CI/CD
 
@@ -320,17 +377,15 @@ If step 1 fails, the script stops and never touches the state. GitHub variables 
 
 | Resource | Billing model | Note |
 |---|---|---|
-| App Service Plan B1 (Linux) | **per hour while the plan exists**, even with zero traffic or stopped apps | The main cost (≈ €12/month). Delete it (`cleanup.sh`) after the final evaluation |
+| Container Apps (Consumption) | per vCPU-second, GiB-second and request, above a monthly free grant | Two small apps (0.25 vCPU, 0.5 GiB, one replica each). No fixed hourly charge. Check the pricing calculator: I did not measure the real monthly cost |
 | ACR Basic | fixed daily rate + storage | Small but continuous |
 | Storage account (state) | per GB + transactions | Negligible (a few KB) |
 | Data lake storage + Data Factory + Logic App (P2) | per GB, per run, per action | Cents per month when idle. A data flow run (General Purpose, 8 cores) costs about 0.17 USD |
 | Managed identities, role assignments | free | – |
 
-Prices in this table are approximate retail prices (germanywestcentral, October 2026); check the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) for your region. The setup costs about €16 per month; the Azure for Students credit covers it until the final evaluation.
+Prices in this table are approximate retail prices (germanywestcentral, October 2026); check the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) for your region. The main fixed cost is ACR Basic; the Azure for Students credit covers the setup until the final evaluation.
 
-**Credit running low?** Ask your instructor first. You can then pause the Web Apps: `gh variable set CREATE_WEB_APPS --body false --repo <owner>/<Infra repo>` and run the **terraform** workflow (deletes the plan and Web Apps, keeps ACR, images and state; ≈ €4.5/month). To resume, set it back to `true`, run **terraform**, then re-run **backend** and **frontend**. The URLs stay the same. If `CI_CAN_ASSIGN_ROLES=false`, run `terraform apply -var create_web_apps=false` (pause) and `terraform apply` (resume) locally instead.
-
-Stopping a Web App or turning off Always On on B1 saves nothing: B1 is billed per hour while the plan exists.
+**Credit running low?** Ask your instructor first. You can then pause the container apps: `gh variable set CREATE_WEB_APPS --body false --repo <owner>/<Infra repo>` and run the **terraform** workflow (deletes the environment and container apps, keeps ACR, images and state). To resume, set it back to `true`, run **terraform**, then re-run **backend** and **frontend**. The URLs stay the same only if the environment is recreated with the same default domain; read the new ones from `terraform output`. If `CI_CAN_ASSIGN_ROLES=false`, run `terraform apply -var create_web_apps=false` (pause) and `terraform apply` (resume) locally instead.
 
 ## 16. Extending (P2/P3)
 
@@ -347,8 +402,9 @@ Modules, app settings, identity outputs, the RBAC allow-list and the backend dat
 | `AADSTS700213` / `No matching federated identity record` | Workflow not running on `main`, or repo renamed | Run on `main`; re-run `bootstrap.sh` |
 | `AuthorizationFailed ... roleAssignments/write` | Role assignment not allowed | Owner must run bootstrap; ask the instructor for the role (§8) |
 | `RequestDisallowedByPolicy` | Azure for Students region policy | Re-run bootstrap with an allowed region (`AZURE_LOCATION=...`) |
-| `Operation cannot be completed without additional quota` / `Current Limit (B1 VMs): 0` | No App Service quota in that region | Re-run `bootstrap.sh` (requests quota) or `az quota update --resource-name B1 --scope /subscriptions/<id>/providers/Microsoft.Web/locations/<region> --limit-object value=1` |
+| Apply fails with `already exists` or `409 Conflict` for a container app | An earlier failed apply or a delete still in progress left an app behind | Wait a minute, or `az containerapp delete -g <rg> -n <app> --yes`, then re-run |
+| `MissingSubscriptionRegistration` for `Microsoft.App` | Resource provider not registered | `az provider register --namespace Microsoft.App --wait`, then re-run |
 | `terraform init`: `403 AuthorizationPermissionMismatch` | Blob role not propagated yet | Wait 2–5 minutes and retry |
 | `Error acquiring the state lock` | A previous run was interrupted | Make sure nothing is running, then `terraform force-unlock <LOCK_ID>` |
 | Terraform workflow: `Image backend:latest not found` | Stage 2 not done | Run the Apps workflows first |
-| Name already taken (ACR/Web App) | Extremely unlikely with the hash suffix | Change `project_name` |
+| Name already taken (ACR/container app) | Extremely unlikely with the hash suffix | Change `project_name` |
