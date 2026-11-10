@@ -367,7 +367,7 @@ check_role_assignment_rights() {
   else
     PREFLIGHT_CI_CAN_ASSIGN_ROLES=false
     warn "Your Owner role is constrained: it cannot delegate role management to GitHub Actions."
-    warn "Not an error: the one Terraform apply that creates the Web Apps will run on your laptop (README > Initial deployment)."
+    warn "Not an error: the one Terraform apply that creates the apps will run on your laptop (README > Initial deployment)."
   fi
 }
 
@@ -402,7 +402,7 @@ print_preflight_summary() {
   fi
   printf '\033[1;32mPreflight passed.\033[0m Run ./bootstrap/bootstrap.sh (same answers) to set everything up.\n'
   if [[ "$PREFLIGHT_CI_CAN_ASSIGN_ROLES" == "false" ]]; then
-    echo "Path: Terraform stage 3 (creating the Web Apps) runs locally; everything else runs in GitHub Actions."
+    echo "Path: Terraform stage 3 (creating the apps) runs locally; everything else runs in GitHub Actions."
   else
     echo "Path: everything runs in GitHub Actions."
   fi
@@ -563,7 +563,7 @@ assign_github_roles() {
   # Create the application resource group and its resources (Terraform, image deployments).
   assign_role "$SP_OBJECT_ID" ServicePrincipal "Contributor" "$subscription_scope"
 
-  # Contributor cannot create role assignments. Terraform must grant AcrPull to the Web Apps'
+  # Contributor cannot create role assignments. Terraform must grant AcrPull to the apps'
   # identity, so the identity may create/delete role assignments, but ONLY for the roles
   # listed in ASSIGNABLE_ROLE_IDS (an ABAC condition on the role assignment).
   local role_ids
@@ -578,7 +578,7 @@ assign_github_roles() {
     unset "MANUAL_STEPS[$before]"
     CI_CAN_ASSIGN_ROLES=false
     warn "GitHub Actions cannot create role assignments in this subscription."
-    warn "The Terraform apply that creates the Web Apps (AcrPull assignment) must run locally (README > Initial deployment)."
+    warn "The Terraform apply that creates the apps (AcrPull assignment) must run locally (README > Initial deployment)."
   else
     CI_CAN_ASSIGN_ROLES=true
   fi
@@ -628,7 +628,7 @@ read_resource_names() {
   read -r APP_RESOURCE_GROUP ACR_NAME BACKEND_WEBAPP_NAME FRONTEND_WEBAPP_NAME <<<"$names"
   [[ -n "$FRONTEND_WEBAPP_NAME" ]] || die "Could not read resource names from Terraform."
   ok "Resource group $APP_RESOURCE_GROUP, registry $ACR_NAME"
-  ok "Web Apps $BACKEND_WEBAPP_NAME, $FRONTEND_WEBAPP_NAME"
+  ok "Apps $BACKEND_WEBAPP_NAME, $FRONTEND_WEBAPP_NAME"
 }
 
 # ----------------------------------------------------------------------------- GitHub
@@ -663,7 +663,7 @@ configure_github_variables() {
   set_github_variable "$INFRA_REPO" TFSTATE_STORAGE_ACCOUNT "$STATE_STORAGE_ACCOUNT"
   set_github_variable "$INFRA_REPO" CI_CAN_ASSIGN_ROLES "$CI_CAN_ASSIGN_ROLES"
 
-  # First deployment creates only the registry. Never reset this once the Web Apps exist,
+  # First deployment creates only the registry. Never reset this once the apps exist,
   # otherwise the next Terraform run would delete them.
   if gh variable get CREATE_WEB_APPS --repo "$GITHUB_OWNER/$INFRA_REPO" >/dev/null 2>&1; then
     ok "$INFRA_REPO: CREATE_WEB_APPS already set to '$(gh variable get CREATE_WEB_APPS --repo "$GITHUB_OWNER/$INFRA_REPO")' (unchanged)"
@@ -686,7 +686,7 @@ print_summary() {
 
   local stage3="run \"terraform\" again                            (creates the apps)"
   if [[ "$CI_CAN_ASSIGN_ROLES" == "false" ]]; then
-    stage3="cd terraform/environments/dev && terraform apply    (locally: creates App Service + Web Apps)"
+    stage3="cd terraform/environments/dev && terraform apply    (locally: creates the apps)"
   fi
 
   cat <<EOF
