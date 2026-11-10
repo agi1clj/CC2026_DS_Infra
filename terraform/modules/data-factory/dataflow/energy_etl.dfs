@@ -1,0 +1,148 @@
+// Data flow script for df_energy_etl. Lines that start with // are comments: Terraform removes them
+// before it sends the script to Data Factory. Pattern for every step:  <input stream> <transformation>(...) ~> <new stream name>
+// When you add a transformation or a sink, also add its name to `locals` in ../main.tf.
+// Output contract: silver, rejected rows and three gold files (daily, latest readings, by location). Rounding: kWh 3 decimals, averages 2.
+parameters{
+	sourceFile as string ('energy_readings.csv')
+}
+// 1. SOURCE: read bronze/raw/<sourceFile>. validateSchema: true = stop with an error if the file does not match the dataset columns.
+source(output(
+		device_id as string,
+		timestamp as string,
+		temperature as double,
+		humidity as double,
+		kwh as double,
+		location as string
+	),
+	allowSchemaDrift: false,
+	validateSchema: true,
+	ignoreNoFilesFound: false,
+	wildcardPaths:[(concat('raw/', $sourceFile))]) ~> BronzeCsv
+// 2. SPLIT: send every row to one of two streams. rejectedRows = breaks a validity rule (empty or negative kwh,
+//    humidity outside 0..100, temperature outside -40..60, or missing). validRows = all other rows.
+//    A comparison with null is never true, so missing values are tested with isNull().
+BronzeCsv split(isNull(kwh) || kwh < 0 || isNull(humidity) || humidity < 0 || humidity > 100 || isNull(temperature) || temperature < -40 || temperature > 60,
+	disjoint: false) ~> CleanRows@(rejectedRows, validRows)
+// 3. DERIVE: write the reason into a new column. iif(test, a, b) is "if test then a else b".
+CleanRows@rejectedRows derive(reject_reason = iif(isNull(kwh), 'kwh empty', iif(kwh < 0, 'kwh negative', iif(isNull(humidity) || humidity < 0 || humidity > 100, 'humidity missing or outside 0..100', 'temperature missing or outside -40..60')))) ~> AddRejectReason
+// 4. AGGREGATE as DISTINCT: one row per (device_id, timestamp). first($$) keeps the first value of every other column.
+//    Duplicates are removed. They are not written anywhere and not counted.
+CleanRows@validRows aggregate(groupBy(device_id, timestamp),
+	each(match(name != 'device_id' && name != 'timestamp'), $$ = first($$))) ~> DropDuplicates
+// 5. DERIVE: add typed columns. event_time = real timestamp; date = first 10 characters of the text (YYYY-MM-DD).
+DropDuplicates derive(event_time = toTimestamp(replace(replace(timestamp, 'T', ' '), 'Z', ''), 'yyyy-MM-dd HH:mm:ss', 'UTC'),
+		date = substring(timestamp, 1, 10)) ~> AddTypedColumns
+// 6. SELECT: choose and rename columns for silver. timestamp = event_time means "write event_time under the name timestamp".
+AddTypedColumns select(mapColumn(
+		device_id,
+		timestamp = event_time,
+		temperature,
+		humidity,
+		kwh,
+		location
+	),
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true) ~> SilverColumns
+// 7. AGGREGATE: one row per device and day. groupBy = the key; the other expressions are the values.
+AddTypedColumns aggregate(groupBy(device_id, location, date),
+	total_kwh = sum(kwh),
+		avg_temperature = avg(temperature),
+		avg_humidity = avg(humidity),
+		readings = count()) ~> DailyTotals
+// 8. DERIVE: round the numbers (kWh: 3 decimals, averages: 2 decimals). Existing columns are overwritten.
+DailyTotals derive(total_kwh = round(total_kwh, 3),
+		avg_temperature = round(avg_temperature, 2),
+		avg_humidity = round(avg_humidity, 2)) ~> RoundDaily
+// 9. SORT: nicer output order. asc(column, true) = ascending, nulls last.
+RoundDaily sort(asc(device_id, true),
+	asc(date, true)) ~> SortDaily
+// 10. WINDOW + FILTER: the 200 newest clean readings (200 = size of latest_readings.json). Data Factory has no limit step.
+//     derive: constant column grp = 1, so all rows are in one window.
+//     window: number the rows newest first (rowNumber() = 1, 2, 3 ...). Timestamps are ISO 8601 text, so text order = time order.
+//     filter: keep rows 1 to 200. sort: the output order (newest first, ties by device_id descending).
+AddTypedColumns derive(grp = 1) ~> AddGroup
+AddGroup window(over(grp),
+	desc(timestamp, true),
+	desc(device_id, true),
+	rn = rowNumber()) ~> NumberRows
+NumberRows filter(rn <= 200) ~> Latest200
+Latest200 sort(desc(timestamp, true),
+	desc(device_id, true)) ~> SortLatest
+// 11. SELECT: keep only the six output columns (not event_time, date, grp and rn).
+SortLatest select(mapColumn(
+		device_id,
+		timestamp,
+		temperature,
+		humidity,
+		kwh,
+		location
+	),
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true) ~> LatestColumns
+// 12. AGGREGATE by location: same pattern as the daily file.
+//     Start from DailyTotals (before rounding) so the sums stay exact.
+DailyTotals aggregate(groupBy(location),
+	total_kwh = sum(total_kwh),
+		devices = countDistinct(device_id),
+		days = countDistinct(date)) ~> LocationTotals
+LocationTotals derive(avg_kwh_per_day = round(total_kwh / days, 3),
+		total_kwh = round(total_kwh, 3)) ~> RoundLocation
+RoundLocation select(mapColumn(
+		location,
+		total_kwh,
+		devices,
+		avg_kwh_per_day
+	),
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true) ~> LocationColumns
+LocationColumns sort(asc(location, true)) ~> SortLocation
+// 13. SINKS: silver = Parquet (folder cleared on each run). Each gold sink = one JSON-lines file in gold/_staging/ (the pipeline turns it into a JSON array while it copies it).
+//     partitionBy('hash', 1) = one output partition = one file.
+SilverColumns sink(allowSchemaDrift: true,
+	validateSchema: false,
+	format: 'parquet',
+	truncate: true,
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> SilverParquet
+SortDaily sink(allowSchemaDrift: true,
+	validateSchema: false,
+	partitionFileNames:['daily_energy_by_device.json'],
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> GoldDaily
+LatestColumns sink(allowSchemaDrift: true,
+	validateSchema: false,
+	partitionFileNames:['latest_readings.json'],
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> GoldLatest
+SortLocation sink(allowSchemaDrift: true,
+	validateSchema: false,
+	partitionFileNames:['energy_by_location.json'],
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> GoldLocation
+// Rejected rows: one CSV file silver/rejected/rejected_rows.csv with the reason (folder cleared on each run).
+AddRejectReason sink(allowSchemaDrift: true,
+	validateSchema: false,
+	truncate: true,
+	partitionFileNames:['rejected_rows.csv'],
+	umask: 0022,
+	preCommands: [],
+	postCommands: [],
+	skipDuplicateMapInputs: true,
+	skipDuplicateMapOutputs: true,
+	partitionBy('hash', 1)) ~> RejectedCsv

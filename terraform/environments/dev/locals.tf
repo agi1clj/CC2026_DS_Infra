@@ -15,6 +15,12 @@ locals {
   backend_app_name    = "${var.project_name}-api-${var.student_initials}-${var.environment}-${local.unique_suffix}"
   frontend_app_name   = "${var.project_name}-ui-${var.student_initials}-${var.environment}-${local.unique_suffix}"
 
+  # P2 data pipeline. The storage name is 3-24 lowercase letters and digits (max 2+10+5+3+4 = 24 characters).
+  # The Data Factory name must be globally unique, hence the suffix.
+  storage_account_name = "st${replace(local.name_base, "-", "")}${local.unique_suffix}"
+  data_factory_name    = "adf-${local.name_base}-${local.unique_suffix}"
+  logic_app_name       = "logic-${local.name_base}-notify"
+
   tags = {
     project     = var.project_name
     environment = var.environment

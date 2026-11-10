@@ -20,3 +20,6 @@ bootstrap/bootstrap.env
 .DS_Store
 .idea/
 .vscode/
+
+# P2: the full dataset (32 MB) comes from the course channel and is never committed
+data/energy_readings.csv

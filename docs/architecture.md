@@ -101,6 +101,41 @@ sequenceDiagram
     AP->>AZ: set image :sha, poll /health and /version.txt
 ```
 
+## Part 2: data pipeline
+
+```mermaid
+flowchart LR
+    admin([Student])
+    subgraph lake["Storage account (ADLS Gen2, no shared keys)"]
+        bronze[(bronze/raw)]
+        silver[(silver/energy_readings<br/>silver/rejected)]
+        staging[(gold/_staging)]
+        hist[(gold/by-timestamp/&lt;run&gt;)]
+        latest[(gold/latest)]
+    end
+    subgraph adf["Data Factory pl-energy-etl (managed identity, Contributor)"]
+        flow[Mapping data flow]
+        copy[Copy: JSON arrays]
+    end
+    logic[Logic App]
+    teams([Teams channel])
+    subgraph web["Apps (P1)"]
+        be[Backend<br/>managed identity, Reader]
+        fe[Frontend]
+    end
+
+    admin -- "upload CSV" --> bronze
+    bronze -- "BlobCreated (Event Grid)" --> adf
+    flow -- "reads" --> bronze
+    flow -- "writes" --> silver & staging
+    staging --> copy --> hist & latest
+    adf -- "status (HTTP)" --> logic -- "Adaptive Card" --> teams
+    be -- "reads" --> latest
+    fe -- "HTTPS /api" --> be
+```
+
+Each run overwrites silver and `gold/latest/`. `gold/by-timestamp/` keeps one folder per run. The backend reads only `gold/latest/`.
+
 ## Ownership
 
 | Concern | Owner |
@@ -108,3 +143,5 @@ sequenceDiagram
 | State storage, GitHub Actions managed identity, its role assignments, GitHub variables | `bootstrap.sh` (once) |
 | Resource group, ACR, environment, identity + AcrPull, container apps, app settings, ports, TLS | Terraform |
 | Which image tag runs | Apps workflows (Terraform ignores the image only) |
+| P2: storage, Data Factory (data flow, pipeline, trigger), Logic App, their roles | Terraform (never edit in the portal) |
+| P2: the CSV in `bronze/raw/` | The student (portal upload) |

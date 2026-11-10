@@ -37,13 +37,14 @@ readonly GITHUB_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 readonly OIDC_AUDIENCE="api://AzureADTokenExchange"
 readonly STATE_CONTAINER="tfstate"
 # Built-in roles that Terraform (running as the GitHub identity) may assign to managed identities.
-# Extension point: when a later project part needs a new role (e.g. "Storage Blob Data Reader"
-# 2a2b9908-6ea1-4ae2-8e65-a410df84e7d1 for P2), add its ID here and re-run this script.
+# Extension point: when a later project part needs a new role, add its ID here and re-run this script.
 readonly ASSIGNABLE_ROLE_IDS=(
   7f951dda-4ed3-4680-a7ca-43fe172d538d # AcrPull
+  ba92f5b4-2d11-453d-a403-e96b0029c9fe # Storage Blob Data Contributor (P2: Data Factory on the data lake)
+  2a2b9908-6ea1-4ae2-8e65-a410df84e7d1 # Storage Blob Data Reader (P2: backend reads gold)
 )
-# Extension point: add the namespace of every new Azure service (e.g. Microsoft.DataFactory).
-readonly RESOURCE_PROVIDERS=(Microsoft.Storage Microsoft.ContainerRegistry Microsoft.App Microsoft.Web Microsoft.ManagedIdentity Microsoft.Quota)
+# Extension point: add the namespace of every new Azure service.
+readonly RESOURCE_PROVIDERS=(Microsoft.Storage Microsoft.ContainerRegistry Microsoft.App Microsoft.Web Microsoft.ManagedIdentity Microsoft.Quota Microsoft.DataFactory Microsoft.EventGrid Microsoft.Logic)
 
 # Steps that failed because of missing permissions; printed at the end.
 MANUAL_STEPS=()
@@ -133,7 +134,7 @@ check_dependencies() {
   info "Checking required tools"
   local tool
   for tool in az gh terraform git; do
-    command -v "$tool" >/dev/null 2>&1 || die "'$tool' is not installed. See docs/student-walkthrough.md > Tools to install first."
+    command -v "$tool" >/dev/null 2>&1 || die "'$tool' is not installed. See docs/p1/student-walkthrough.md > Tools to install first."
   done
   ok "az, gh, terraform and git are installed"
 }
@@ -363,7 +364,7 @@ check_role_assignment_rights() {
   # the RBAC Administrator role (Microsoft's recommended "privileged roles" condition).
   if grep -qvE $'\t.+' <<<"$assignments" || ! grep -q "$RBAC_ADMIN_ROLE_ID" <<<"$assignments"; then
     PREFLIGHT_CI_CAN_ASSIGN_ROLES=true
-    ok "GitHub Actions can be allowed to assign AcrPull (Terraform runs fully in CI)"
+    ok "GitHub Actions can be allowed to assign roles (Terraform runs fully in CI)"
   else
     PREFLIGHT_CI_CAN_ASSIGN_ROLES=false
     warn "Your Owner role is constrained: it cannot delegate role management to GitHub Actions."
@@ -578,7 +579,7 @@ assign_github_roles() {
     unset "MANUAL_STEPS[$before]"
     CI_CAN_ASSIGN_ROLES=false
     warn "GitHub Actions cannot create role assignments in this subscription."
-    warn "The Terraform apply that creates the apps (AcrPull assignment) must run locally (README > Initial deployment)."
+    warn "The Terraform apply that creates the apps (role assignments) must run locally (README > Initial deployment)."
   else
     CI_CAN_ASSIGN_ROLES=true
   fi

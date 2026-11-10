@@ -9,7 +9,11 @@ provider "azurerm" {
   resource_providers_to_register = [
     "Microsoft.App",
     "Microsoft.ContainerRegistry",
+    "Microsoft.DataFactory",
+    "Microsoft.EventGrid",
+    "Microsoft.Logic",
     "Microsoft.ManagedIdentity",
+    "Microsoft.Storage",
     "Microsoft.Web",
   ]
 }

@@ -1,10 +1,10 @@
 # Extending the platform (P2, P3 and beyond)
 
-The platform is built so that later project parts **add** services without restructuring what already works. This page lists the extension points and walks through one example. Nothing here is implemented in P1.
+The platform is built so that later project parts **add** services without restructuring what already works. This page lists the extension points. P2 is implemented (modules `storage`, `data-factory`, `notification`). P3 is not.
 
 | Later part | Likely Azure services (from the course architecture) |
 |---|---|
-| P2 – data pipeline | Blob Storage (raw + processed data), Data Factory, Azure Functions / Logic Apps, Teams notification |
+| P2 – data pipeline (**implemented**) | Data lake (modules `storage`, `data-factory`, `notification`), walkthrough: [p2/student-walkthrough.md](p2/student-walkthrough.md), diagram: [architecture.md](architecture.md) |
 | P3 – identity | Microsoft Entra ID sign-in for the frontend and backend |
 
 ## Extension points
@@ -23,74 +23,6 @@ The platform is built so that later project parts **add** services without restr
 | Frontend config | `RuntimeConfig` in `frontend/src/types.ts` + `docker/40-runtime-config.sh` | Add public runtime values (e.g. a P3 sign-in client ID). Never secrets |
 | New deployable app | `.github/workflows/<app>.yml` (Apps repo) | Copy `backend.yml`: test job + deploy job using the same OIDC variables |
 | Tests | `terraform/environments/dev/tests/*.tftest.hcl` | Add a `run` block asserting names/wiring with the mocked provider |
-
-## Worked example: Blob Storage for P2 (sketch)
-
-1. **Module** `terraform/modules/storage/main.tf`:
-
-   ```hcl
-   resource "azurerm_storage_account" "main" {
-     name                            = var.name
-     resource_group_name             = var.resource_group_name
-     location                        = var.location
-     account_tier                    = "Standard"
-     account_replication_type        = "LRS"
-     min_tls_version                 = "TLS1_2"
-     shared_access_key_enabled       = false
-     allow_nested_items_to_be_public = false
-
-     tags = var.tags
-   }
-
-   resource "azurerm_storage_container" "processed" {
-     name               = "processed"
-     storage_account_id = azurerm_storage_account.main.id
-   }
-   ```
-
-   Outputs: `id`, `primary_blob_endpoint`. Check the attribute names against the azurerm version in `.terraform.lock.hcl` before you use them.
-
-2. **Name** in `locals.tf`: `storage_account_name = "st${replace(local.name_base, "-", "")}${local.unique_suffix}"` (3–24 lowercase letters and digits).
-
-3. **Compose** in `main.tf`:
-
-   ```hcl
-   module "storage" {
-     source = "../../modules/storage"
-
-     name                = local.storage_account_name
-     resource_group_name = azurerm_resource_group.main.name
-     location            = azurerm_resource_group.main.location
-     tags                = local.tags
-   }
-   ```
-
-   and add to the existing `module "app_service"` block:
-
-   ```hcl
-   backend_app_settings = {
-     STORAGE_ACCOUNT_URL = module.storage.primary_blob_endpoint
-   }
-   ```
-
-   The backend already receives `AZURE_CLIENT_ID` (its managed identity), so `DefaultAzureCredential` in the Azure SDK authenticates without further configuration.
-
-4. **Access**: allow-list *Storage Blob Data Reader* (`2a2b9908-6ea1-4ae2-8e65-a410df84e7d1`) in `bootstrap.sh`, re-run bootstrap, then:
-
-   ```hcl
-   resource "azurerm_role_assignment" "backend_reads_blobs" {
-     count = var.create_web_apps ? 1 : 0
-
-     scope                = module.storage.id
-     role_definition_name = "Storage Blob Data Reader"
-     principal_id         = module.app_service[0].identity_principal_id
-     principal_type       = "ServicePrincipal"
-   }
-   ```
-
-5. **Backend**: add `storage_account_url` to `Settings`, implement a `BlobMeasurementSource` with `azure-identity` + `azure-storage-blob`, and select it in `get_measurement_source()` when the URL is set. Locally the in-memory source keeps working.
-
-6. **Validate**: `terraform fmt -recursive`, `terraform validate`, `terraform test`, then the *terraform* workflow (plan first).
 
 ## Rules that keep the project simple
 
