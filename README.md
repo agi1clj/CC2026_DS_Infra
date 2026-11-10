@@ -176,6 +176,7 @@ Granted to the **GitHub Actions identity**:
 |---|---|---|
 | Policy *Allowed resource deployment regions* (e.g. germanywestcentral, francecentral, swedencentral, spaincentral, polandcentral) | Deployments elsewhere fail with `RequestDisallowedByPolicy` | `bootstrap.sh` reads the policy, defaults to an allowed region and rejects others |
 | App Service VMs (B1) are often blocked or have quota 0 | This is why new setups use Container Apps (Consumption, no VM quota) | Preflight checks that the region offers Container Apps; with `HOSTING=app_service` it checks the B1 quota instead |
+| One Container Apps environment per region | A second environment in the same region fails with `MaxNumberOfRegionalExpressEnvironmentsInSubExceeded` | This project uses exactly one. Do not deploy it twice in the same region; run `cleanup.sh` before starting over |
 | Fixed credit, no pay-as-you-go | Resources stop when credit runs out | Use Container Apps (Consumption) + ACR Basic only; run `cleanup.sh` after the final evaluation |
 | University tenant blocks app registrations | No Entra application possible | Bootstrap uses a user-assigned managed identity (below) |
 | Owner may be constrained (cannot assign RBAC roles to others) | GitHub identity cannot create AcrPull assignments | Local stage-3 apply (§11) |
@@ -386,6 +387,7 @@ Modules, app settings, identity outputs, the RBAC allow-list and the backend dat
 | `AuthorizationFailed ... roleAssignments/write` | Role assignment not allowed | Owner must run bootstrap; ask the instructor for the role (§8) |
 | `RequestDisallowedByPolicy` | Azure for Students region policy | Re-run bootstrap with an allowed region (`AZURE_LOCATION=...`) |
 | Apply fails with `already exists` or `409 Conflict` for a container app | An earlier failed apply or a delete still in progress left an app behind | Wait a minute, or `az containerapp delete -g <rg> -n <app> --yes`, then re-run |
+| `MaxNumberOfRegionalExpressEnvironmentsInSubExceeded` (409) when creating the Container Apps environment | Azure for Students allows only 1 Container Apps environment per region, and another one already exists in that region (an old deployment, a second set of initials, or one still deleting) | Delete the old environment (`az containerapp env delete -g <rg> -n <env>`), wait until it is gone, then re-run. Or use another allowed region (`AZURE_LOCATION=...`) |
 | `MissingSubscriptionRegistration` for `Microsoft.App` | Resource provider not registered | `az provider register --namespace Microsoft.App --wait`, then re-run |
 | `terraform init`: `403 AuthorizationPermissionMismatch` | Blob role not propagated yet | Wait 2–5 minutes and retry |
 | `Error acquiring the state lock` | A previous run was interrupted | Make sure nothing is running, then `terraform force-unlock <LOCK_ID>` |
