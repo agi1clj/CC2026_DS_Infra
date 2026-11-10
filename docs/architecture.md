@@ -22,9 +22,9 @@ flowchart TB
         subgraph apprg["rg-cc2026-&lt;initials&gt;-dev"]
             acr[(Container registry Basic)]
             uami[User-assigned identity]
-            subgraph plan["App Service Plan Linux B1"]
-                fe[Frontend Web App :8080]
-                be[Backend Web App :8000]
+            subgraph plan["Container Apps environment"]
+                fe[Frontend container app :8080]
+                be[Backend container app :8000]
             end
         end
     end
@@ -60,9 +60,9 @@ flowchart LR
         subgraph registry["«node» Container registry (Basic)"]
             images["«artifact» backend:&lt;sha&gt;<br/>«artifact» frontend:&lt;sha&gt;"]
         end
-        subgraph asp["«node» App Service Plan – Linux B1 (1 instance)"]
-            bewa["«executionEnvironment» Web App cc2026-api-…<br/>container :8000"]
-            fewa["«executionEnvironment» Web App cc2026-ui-…<br/>container :8080"]
+        subgraph asp["«node» Container Apps environment (Consumption)"]
+            bewa["«executionEnvironment» Container app cc2026-api-…<br/>container :8000"]
+            fewa["«executionEnvironment» Container app cc2026-ui-…<br/>container :8080"]
         end
     end
 
@@ -94,9 +94,9 @@ sequenceDiagram
     S->>TF: Run workflow
     TF->>AZ: apply: resource group + ACR
     S->>AP: push to main
-    AP->>AZ: push backend/frontend :sha and :latest (Web Apps not there yet)
+    AP->>AZ: push backend/frontend :sha and :latest (container apps not there yet)
     S->>TF: CREATE_WEB_APPS=true, Run workflow
-    TF->>AZ: check :latest images exist, apply: plan, identity, AcrPull, Web Apps
+    TF->>AZ: check :latest images exist, apply: environment, identity, AcrPull, container apps
     S->>AP: re-run workflows (and every later push)
     AP->>AZ: set image :sha, poll /health and /version.txt
 ```
@@ -106,5 +106,5 @@ sequenceDiagram
 | Concern | Owner |
 |---|---|
 | State storage, GitHub Actions managed identity, its role assignments, GitHub variables | `bootstrap.sh` (once) |
-| Resource group, ACR, plan, identity + AcrPull, Web Apps, app settings, ports, TLS | Terraform |
-| Which image tag runs | Apps workflows (Terraform ignores `docker_image_name` only) |
+| Resource group, ACR, environment, identity + AcrPull, container apps, app settings, ports, TLS | Terraform |
+| Which image tag runs | Apps workflows (Terraform ignores the image only) |

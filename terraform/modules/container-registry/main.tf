@@ -1,5 +1,5 @@
 # Azure Container Registry that stores the backend and frontend images.
-# The admin user stays disabled: Web Apps pull with a managed identity and
+# The admin user stays disabled: the container apps pull with a managed identity and
 # GitHub Actions pushes with its Entra ID (OIDC) identity.
 resource "azurerm_container_registry" "main" {
   name                = var.name

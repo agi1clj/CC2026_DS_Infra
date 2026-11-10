@@ -4,14 +4,26 @@ variable "acr_sku" {
   default     = "Basic"
 }
 
+variable "hosting" {
+  description = "Where the backend and frontend run: container_apps (Azure Container Apps, no VM quota needed) or app_service (App Service Plan, needs B1 quota). bootstrap.sh sets container_apps for new setups. The default keeps existing App Service setups unchanged. Changing it replaces the apps (new URLs)."
+  type        = string
+  default     = "app_service"
+  nullable    = false
+
+  validation {
+    condition     = contains(["container_apps", "app_service"], var.hosting)
+    error_message = "hosting must be container_apps or app_service."
+  }
+}
+
 variable "app_service_sku" {
-  description = "SKU of the shared Linux App Service Plan (B1 is the cheapest SKU that supports Always On)."
+  description = "SKU of the Linux App Service Plan, used only when hosting is app_service (B1 is the cheapest SKU that supports Always On)."
   type        = string
   default     = "B1"
 }
 
 variable "create_web_apps" {
-  description = "Create the App Service Plan and Web Apps. Set to false only for the very first apply, before the first images exist in ACR."
+  description = "Create the two apps (and the App Service Plan or Container Apps environment). Set to false only for the very first apply, before the first images exist in ACR."
   type        = bool
   default     = true
   nullable    = false

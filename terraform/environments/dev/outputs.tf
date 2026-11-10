@@ -9,22 +9,22 @@ output "acr_name" {
 }
 
 output "backend_url" {
-  description = "Public HTTPS URL of the backend (null until the Web Apps are created)."
-  value       = one(module.app_service[*].backend_url)
+  description = "Public HTTPS URL of the backend (null until the apps are created)."
+  value       = one(concat(module.app_service[*].backend_url, module.container_apps[*].backend_url))
 }
 
 output "backend_webapp_name" {
-  description = "Name of the backend Web App (GitHub variable BACKEND_WEBAPP_NAME)."
+  description = "Name of the backend app (Web App or container app; GitHub variable BACKEND_WEBAPP_NAME)."
   value       = local.backend_app_name
 }
 
 output "frontend_url" {
-  description = "Public HTTPS URL of the frontend (null until the Web Apps are created)."
-  value       = one(module.app_service[*].frontend_url)
+  description = "Public HTTPS URL of the frontend (null until the apps are created)."
+  value       = one(concat(module.app_service[*].frontend_url, module.container_apps[*].frontend_url))
 }
 
 output "frontend_webapp_name" {
-  description = "Name of the frontend Web App (GitHub variable FRONTEND_WEBAPP_NAME)."
+  description = "Name of the frontend app (Web App or container app; GitHub variable FRONTEND_WEBAPP_NAME)."
   value       = local.frontend_app_name
 }
 
