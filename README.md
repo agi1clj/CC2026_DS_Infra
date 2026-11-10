@@ -53,7 +53,7 @@ The hex suffixes come from a hash of the subscription ID and your initials. They
 terraform/
 ├── modules/
 │   ├── container-registry/   azurerm_container_registry (admin user disabled)
-│   ├── container-apps/       default hosting: environment, identity + AcrPull, backend + frontend container apps
+│   ├── container-apps/       environment, identity + AcrPull, backend + frontend container apps
 │   └── app-service/          optional hosting (hosting = app_service): plan, identity + AcrPull, backend + frontend Web Apps
 │                             (inputs backend_app_settings / frontend_app_settings for later parts)
 └── environments/
@@ -95,7 +95,7 @@ Both come from the same answers you give `bootstrap.sh`, so local and CI runs re
 | `project_name` | `cc2026` | Name prefix |
 | `environment` | `dev` | Only `dev` exists |
 | `location` | `germanywestcentral` | Azure region (must be allowed by the subscription's region policy) |
-| `hosting` | `container_apps` | Where the apps run: `container_apps` (default, no VM quota) or `app_service` (App Service Plan, needs B1 quota). GitHub variable `HOSTING` |
+| `hosting` | `app_service` | Where the apps run: `container_apps` (no VM quota; set by bootstrap for new setups) or `app_service` (App Service Plan, needs B1 quota). The default keeps existing setups unchanged. GitHub variable `HOSTING` |
 | `app_service_sku` | `B1` | Plan SKU, used only with `hosting = app_service` |
 | `acr_sku` | `Basic` | Registry SKU |
 | `create_web_apps` | `true` | `false` only for the first apply (see §11) |
@@ -175,7 +175,7 @@ Granted to the **GitHub Actions identity**:
 | Constraint | Effect | Handled by |
 |---|---|---|
 | Policy *Allowed resource deployment regions* (e.g. germanywestcentral, francecentral, swedencentral, spaincentral, polandcentral) | Deployments elsewhere fail with `RequestDisallowedByPolicy` | `bootstrap.sh` reads the policy, defaults to an allowed region and rejects others |
-| App Service VMs (B1) are often blocked or have quota 0 | This is why Container Apps (Consumption, no VM quota) is the default hosting | Preflight checks that the region offers Container Apps; with `HOSTING=app_service` it checks the B1 quota instead |
+| App Service VMs (B1) are often blocked or have quota 0 | This is why new setups use Container Apps (Consumption, no VM quota) | Preflight checks that the region offers Container Apps; with `HOSTING=app_service` it checks the B1 quota instead |
 | Fixed credit, no pay-as-you-go | Resources stop when credit runs out | Use Container Apps (Consumption) + ACR Basic only; run `cleanup.sh` after the final evaluation |
 | University tenant blocks app registrations | No Entra application possible | Bootstrap uses a user-assigned managed identity (below) |
 | Owner may be constrained (cannot assign RBAC roles to others) | GitHub identity cannot create AcrPull assignments | Local stage-3 apply (§11) |
@@ -257,47 +257,56 @@ Later CI runs only update resources and pass. The workflow stops with a clear er
 
 ## 11b. Updating an existing deployment (App Service or Container Apps)
 
-Container Apps is the default hosting. App Service is still supported with `hosting = app_service` (GitHub variable `HOSTING`), for students who already run on it. The GitHub variable names (`BACKEND_WEBAPP_NAME`, `FRONTEND_WEBAPP_NAME`, `CREATE_WEB_APPS`) did not change.
+New setups run on Azure Container Apps: `bootstrap.sh` sets `HOSTING=container_apps`. App Service is still supported with `hosting = app_service`. The Terraform default is `app_service`, so an existing deployment does not change when you update. The GitHub variable names (`BACKEND_WEBAPP_NAME`, `FRONTEND_WEBAPP_NAME`, `CREATE_WEB_APPS`) did not change.
 
-**Decide first, before you run the terraform workflow.** If you apply the new version without setting `HOSTING`, Terraform replaces your Web Apps with container apps (new URLs).
+**1. Get the new version in both repositories** (everyone). Your repositories were created from a template, so add the template as a remote and copy the changed files:
 
-| Your situation | What to do |
-|---|---|
-| Running on App Service and you want to stay | `gh variable set HOSTING --body app_service --repo <owner>/<Infra repo>`. Local apply: add `hosting = "app_service"` to `terraform.tfvars`. Nothing else changes. |
-| B1 does not work for you, or you want Container Apps | Do nothing special: the default is `container_apps`. Follow the steps below. |
+```bash
+# Apps repository (only the workflows; your own backend and frontend code stays untouched)
+cd CC2026_<LastName>_<FirstName>_Apps
+git remote add template https://github.com/agi1clj/CC2026_DS_Applications.git
+git fetch template
+git checkout template/main -- .github/workflows/backend.yml .github/workflows/frontend.yml
+git commit -am "Deploy to Container Apps or App Service" && git push
 
-1. Get the new version in **both** repositories. Your repositories were created from a template, so add the template as a remote and copy the changed files:
+# Infra repository (all files; you do not edit them)
+cd ../CC2026_<LastName>_<FirstName>_Infra
+git remote add template https://github.com/agi1clj/CC2026_DS_Infra.git
+git fetch template
+git checkout template/main -- .
+git add -A && git commit -m "Add Container Apps hosting" && git push
+```
 
-   ```bash
-   # Apps repository (only the workflows; your own backend and frontend code stays untouched)
-   cd CC2026_<LastName>_<FirstName>_Apps
-   git remote add template https://github.com/agi1clj/CC2026_DS_Applications.git
-   git fetch template
-   git checkout template/main -- .github/workflows/backend.yml .github/workflows/frontend.yml
-   git commit -am "Deploy to Azure Container Apps" && git push
+If `git remote add` says `template` already exists, skip that line. The Apps workflows detect on their own whether the app runs on App Service or Container Apps.
 
-   # Infra repository (all files; you do not edit them)
-   cd ../CC2026_<LastName>_<FirstName>_Infra
-   git remote add template https://github.com/agi1clj/CC2026_DS_Infra.git
-   git fetch template
-   git checkout template/main -- .
-   git add -A && git commit -m "Move to Azure Container Apps" && git push
-   ```
+**2. You have not created the apps yet** (you never ran bootstrap, or you stopped before Step 7c of the walkthrough). Use Container Apps from the start:
 
-   If `git remote add` says `template` already exists, skip that line.
-2. Infra: run the **terraform** workflow (*Actions → terraform → Run workflow*). If bootstrap reported `CI_CAN_ASSIGN_ROLES=false`, run it on your laptop instead:
+```bash
+HOSTING=container_apps ./bootstrap/bootstrap.sh
+```
 
-   ```bash
-   cd terraform/environments/dev
-   terraform init -backend-config=backend.hcl
-   terraform apply
-   ```
+Bootstrap is safe to re-run: it updates `terraform.tfvars` and the GitHub variables (`HOSTING` included) and keeps `CREATE_WEB_APPS`. Then continue with the walkthrough at Step 7. If you never ran bootstrap, plain `./bootstrap/bootstrap.sh` already uses Container Apps.
 
-   On a migration, Terraform deletes the App Service Plan, the two Web Apps and the old identity. It creates the Container Apps environment, the new identity (`id-...-apps`), the role assignments and two container apps on `:latest`. ACR, images, storage and Data Factory stay.
-3. Apps: re-run the **backend** and **frontend** workflows. They switch the container apps to the commit-tagged images.
-4. The URLs change. Read them with `terraform output frontend_url backend_url` (or the workflow summary). They end in `.azurecontainerapps.io`.
+**3. Stay on App Service.** Nothing else to do. The **terraform** workflow shows `No changes`.
 
-You do not need to re-run `bootstrap.sh` for an existing deployment; Terraform registers the `Microsoft.App` provider by itself. For a new setup, `./bootstrap/bootstrap.sh --check` and then `./bootstrap/bootstrap.sh` work as before (§9) and use Container Apps; set `HOSTING=app_service` in `bootstrap/bootstrap.env` to use App Service (then bootstrap also checks the B1 quota). If you re-run bootstrap on an existing App Service setup, set `HOSTING=app_service` first. If the apply fails with a `Microsoft.App` registration error, run `az provider register --namespace Microsoft.App --wait`.
+**4. Move to Container Apps after the apps exist on App Service** (for example because B1 does not work for you). The URLs change.
+
+```bash
+gh variable set HOSTING --body container_apps --repo <owner>/<Infra repo>
+# local apply only: add  hosting = "container_apps"  to terraform/environments/dev/terraform.tfvars
+```
+
+Then run the **terraform** workflow (*Actions → terraform → Run workflow*). If bootstrap reported `CI_CAN_ASSIGN_ROLES=false`, run it on your laptop instead:
+
+```bash
+cd terraform/environments/dev
+terraform init -backend-config=backend.hcl
+terraform apply
+```
+
+Terraform deletes the App Service Plan, the two Web Apps and the old identity. It creates the Container Apps environment, the new identity (`id-...-apps`), the role assignments and two container apps on `:latest`. ACR, images and state stay. Then re-run **backend** and **frontend** in the Apps repository and read the new URLs with `terraform output frontend_url backend_url` (they end in `.azurecontainerapps.io`).
+
+You do not need to re-run `bootstrap.sh` for an existing deployment. If you do re-run it, an existing `bootstrap/bootstrap.env` keeps you on App Service; set `HOSTING=container_apps` in that file to move. For a new setup, `./bootstrap/bootstrap.sh --check` and then `./bootstrap/bootstrap.sh` work as before (§9) and use Container Apps. If the apply fails with a `Microsoft.App` registration error, run `az provider register --namespace Microsoft.App --wait`.
 
 ## 12. Terraform CI/CD
 

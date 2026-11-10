@@ -183,8 +183,11 @@ collect_inputs() {
   fi
 
   PROJECT_NAME="${PROJECT_NAME:-cc2026}"
-  # Where the apps run: container_apps (default, no VM quota needed) or app_service (needs B1 quota).
-  HOSTING="${HOSTING:-container_apps}"
+  # Where the apps run: container_apps (new setups, no VM quota needed) or app_service (needs B1 quota).
+  # A bootstrap.env without HOSTING comes from the App Service version: keep that setup.
+  if [[ -z "${HOSTING:-}" ]]; then
+    if [[ -f "$SETTINGS_FILE" ]]; then HOSTING=app_service; else HOSTING=container_apps; fi
+  fi
   [[ "$HOSTING" == "container_apps" || "$HOSTING" == "app_service" ]] || die "HOSTING must be container_apps or app_service (got '$HOSTING')."
   APP_SERVICE_SKU="${APP_SERVICE_SKU:-B1}"
   ACR_SKU="${ACR_SKU:-Basic}"

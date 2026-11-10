@@ -131,18 +131,18 @@ Your answers are saved in `bootstrap/bootstrap.env` (not committed). **Renamed a
 
 If it stops with a permissions message, show the output to your instructor (README §8).
 
-**Where do the apps run? Container Apps (default) or App Service**
+**Where do the apps run? Container Apps or App Service**
 
-By default bootstrap deploys the apps to **Azure Container Apps**. It needs no VM quota, which is why it works on Azure for Students subscriptions where App Service B1 is blocked. Both options run the same two containers and give the same result: a frontend URL and a backend URL.
+A new setup deploys the apps to **Azure Container Apps**. It needs no VM quota, which is why it works on Azure for Students subscriptions where App Service B1 is blocked. Both options run the same two containers and give the same result: a frontend URL and a backend URL.
 
-| | Container Apps (default) | App Service (option) |
+| | Container Apps (new setups) | App Service (option) |
 |---|---|---|
-| Set in `bootstrap/bootstrap.env` | `HOSTING=container_apps` (or nothing) | `HOSTING=app_service` |
+| Set in `bootstrap/bootstrap.env` | `HOSTING=container_apps` (or nothing, on a first run) | `HOSTING=app_service` |
 | Needs B1 quota in your region | No | Yes (bootstrap checks it and requests it) |
 | URL ends with | `.azurecontainerapps.io` | `.azurewebsites.net` |
 | Logs | `az containerapp logs show -g <rg> -n <app> --follow` | `az webapp log tail -g <rg> -n <app>` |
 
-Use App Service only if your instructor tells you to, or if you already started on it. You choose once, before Step 7. If you change it later, Terraform replaces the apps and the URLs change. If you started on App Service earlier, keep it: run `gh variable set HOSTING --body app_service --repo <owner>/<Infra repo>` and put `hosting = "app_service"` in `terraform.tfvars` before you update. The update steps are in the Infra README, section 11b.
+Use App Service only if your instructor tells you to. You choose once, before Step 7. If you change it later, Terraform replaces the apps and the URLs change. Already started with an older version but not created the apps yet? Run `HOSTING=container_apps ./bootstrap/bootstrap.sh` now: it is safe to re-run. If the apps already run on App Service, you stay on it when you update: see the Infra README, section 11b.
 
 ## Step 7 — Deploy the initial infrastructure
 

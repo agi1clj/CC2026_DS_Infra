@@ -5,9 +5,9 @@ variable "acr_sku" {
 }
 
 variable "hosting" {
-  description = "Where the backend and frontend run: container_apps (Azure Container Apps, no VM quota needed) or app_service (App Service Plan, needs B1 quota). Changing it replaces the apps (new URLs). Existing App Service setups must set hosting to app_service (GitHub variable HOSTING) before they apply."
+  description = "Where the backend and frontend run: container_apps (Azure Container Apps, no VM quota needed) or app_service (App Service Plan, needs B1 quota). bootstrap.sh sets container_apps for new setups. The default keeps existing App Service setups unchanged. Changing it replaces the apps (new URLs)."
   type        = string
-  default     = "container_apps"
+  default     = "app_service"
   nullable    = false
 
   validation {

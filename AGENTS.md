@@ -18,7 +18,7 @@ Teaching project (UTCN Cloud Computing). Azure infra for the companion Apps repo
 - Follow the HashiCorp style guide: every variable has `type` + `description`, every output a `description`; no provisioners; no hard-coded IDs or secrets.
 - Do not commit `terraform.tfvars`, `backend.hcl` or state. Do commit `.terraform.lock.hcl` (lock for linux_amd64, darwin_arm64, darwin_amd64, windows_amd64).
 - `ignore_changes` covers only the image (Container Apps: `template[0].container[0].image`; App Service: `docker_image_name`). Apps CI owns image tags. Never widen it.
-- `hosting` selects `container_apps` (default) or `app_service`; exactly one module is created. Changing it replaces the apps. Keep both modules working and tested.
+- `hosting` selects `container_apps` (set by bootstrap for new setups) or `app_service` (the variable default, so existing setups never change by accident); exactly one module is created. Changing it replaces the apps. Keep both modules working and tested.
 - `CREATE_WEB_APPS` must never go back to `false` once the apps exist (it would delete them).
 - New roles Terraform assigns must be added to `ASSIGNABLE_ROLE_IDS` in `bootstrap.sh`; new resource providers to both `bootstrap.sh` and `providers.tf`.
 - Commits follow Conventional Commits: `type(scope): summary` with type in feat, fix, docs, refactor, test, ci, build, chore (e.g. `fix(bootstrap): reuse existing state resource group`).
